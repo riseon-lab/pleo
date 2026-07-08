@@ -1,0 +1,309 @@
+"""Training jobs: one at a time, driven through the trainer runner. Job
+records persist to data/training/jobs.json; artifacts (checkpoints, samples,
+logs) live under data/training/<job_id>/."""
+import asyncio
+import os
+import re
+import shutil
+import time
+from pathlib import Path
+from typing import Optional
+
+import httpx
+from fastapi import APIRouter, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+
+from . import captioner_manager, config, events, proc, runner_manager
+from .auth import AUTHED
+from .datasets import _items as dataset_items
+from .datasets import _meta as dataset_meta
+from .datasets import images_dir
+from .registry import get_model
+from .util import atomic_write_json, new_id, path_inside, read_json, safe_filename
+
+router = APIRouter(prefix="/api/training", tags=["training"], dependencies=[AUTHED])
+
+TRAINING_DIR = config.DATA_DIR / "training"
+JOBS_FILE = TRAINING_DIR / "jobs.json"
+PORT = int(os.environ.get("PLEO_TRAINER_PORT", "8803"))
+
+DEFAULT_CHECKPOINTS = [250, 500, 750, 1000, 1500, 2000]
+
+_live: dict = {"job_id": None, "proc": None, "poll_task": None, "hf_key": None}
+_lock = asyncio.Lock()
+
+
+def _jobs() -> list[dict]:
+    return read_json(JOBS_FILE, [])
+
+
+def _save_jobs(jobs: list[dict]) -> None:
+    atomic_write_json(JOBS_FILE, jobs)
+
+
+def _job(job_id: str) -> dict:
+    for j in _jobs():
+        if j["id"] == job_id:
+            return j
+    raise HTTPException(404, "No such training job")
+
+
+def _update_job(job_id: str, patch: dict) -> dict:
+    jobs = _jobs()
+    for j in jobs:
+        if j["id"] == job_id:
+            j.update(patch)
+            _save_jobs(jobs)
+            return j
+    raise HTTPException(404, "No such training job")
+
+
+def job_dir(job_id: str) -> Path:
+    d = TRAINING_DIR / job_id
+    if not path_inside(TRAINING_DIR, d):
+        raise HTTPException(400, "Bad job id")
+    return d
+
+
+class HFPush(BaseModel):
+    repo_id: str
+    private: bool = True
+
+
+class CreateJobBody(BaseModel):
+    name: str = Field(..., min_length=1, max_length=120)
+    dataset_id: str
+    base_model: str
+    trigger_word: str = Field("", max_length=80)
+    steps: int = Field(..., ge=50, le=20000)
+    checkpoint_steps: list[int] = []
+    sample_prompts: list[str] = Field([], max_length=8)
+    rank: int = Field(16, ge=1, le=128)
+    lr: float = Field(1e-4, gt=0, le=1)
+    resolution: int = Field(1024, ge=256, le=2048)
+    batch_size: int = Field(1, ge=1, le=8)
+    hf_push: Optional[HFPush] = None
+    hf_key: Optional[str] = None  # transient; never persisted
+
+
+def _public(job: dict) -> dict:
+    return {k: v for k, v in job.items() if k != "hf_key"}
+
+
+@router.get("/jobs")
+def list_jobs():
+    return {"jobs": sorted((_public(j) for j in _jobs()),
+                           key=lambda j: j["created"], reverse=True),
+            "active": _live["job_id"], "mock": config.MOCK,
+            "default_checkpoints": DEFAULT_CHECKPOINTS}
+
+
+@router.post("/jobs")
+async def create_job(body: CreateJobBody):
+    if _live["job_id"]:
+        raise HTTPException(409, "A training job is already running")
+    model = get_model(body.base_model)
+    if not model.get("trainable"):
+        raise HTTPException(400, f"{model['name']} is not a trainable base (use Z Image Base or Qwen Image)")
+    meta = dataset_meta(body.dataset_id)
+    items = dataset_items(body.dataset_id)
+    if not items:
+        raise HTTPException(400, "Dataset has no images")
+    uncaptioned = sum(1 for i in items if not i["caption"].strip())
+    if body.hf_push and not body.hf_key and not config.MOCK:
+        raise HTTPException(400, "Hugging Face push requires your HF key (sent transiently)")
+    checkpoints = sorted({s for s in (body.checkpoint_steps or DEFAULT_CHECKPOINTS)
+                          if 0 < s <= body.steps})
+    job = {
+        "id": new_id(8),
+        "name": body.name.strip(),
+        "dataset_id": body.dataset_id,
+        "dataset_name": meta["name"],
+        "base_model": body.base_model,
+        "trigger_word": body.trigger_word.strip(),
+        "steps": body.steps,
+        "checkpoint_steps": checkpoints,
+        "sample_prompts": [p.strip() for p in body.sample_prompts if p.strip()],
+        "rank": body.rank, "lr": body.lr,
+        "resolution": body.resolution, "batch_size": body.batch_size,
+        "hf_push": body.hf_push.model_dump() if body.hf_push else None,
+        "status": "created", "step": 0, "loss": None, "sec_per_step": None,
+        "checkpoints": [], "error": None,
+        "created": time.time(), "started": None, "finished": None,
+        "dataset_stats": {"images": len(items), "uncaptioned": uncaptioned},
+    }
+    _save_jobs(_jobs() + [job])
+    await _start_job(job, body.hf_key)
+    return _public(_job(job["id"]))
+
+
+async def _start_job(job: dict, hf_key: Optional[str]) -> None:
+    async with _lock:
+        if _live["job_id"]:
+            raise HTTPException(409, "A training job is already running")
+        model = get_model(job["base_model"])
+        try:
+            python = proc.pick_python("trainer")
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
+        # Free the GPU: generation and captioning runners are stopped.
+        await runner_manager.stop_runner()
+        await captioner_manager.shutdown()
+
+        d = job_dir(job["id"])
+        d.mkdir(parents=True, exist_ok=True)
+        cfg = {
+            "training_job": job,
+            "mock": config.MOCK,
+            "mock_sec_per_step": float(os.environ.get("PLEO_MOCK_TRAIN_PACE", "0.03")),
+            "hf_home": str(config.HF_CACHE_DIR),
+            "job_dir": str(d),
+            "dataset_dir": str(images_dir(job["dataset_id"])),
+            "base_model": model,
+        }
+        p = proc.spawn("trainer.py", cfg, PORT, python)
+        try:
+            await proc.wait_health(p, PORT)
+            async with httpx.AsyncClient(timeout=30) as client:
+                (await client.post(f"http://127.0.0.1:{PORT}/start")).raise_for_status()
+        except Exception as e:
+            await proc.stop(p, PORT)
+            _update_job(job["id"], {"status": "error", "error": f"trainer failed to start: {e}"})
+            raise HTTPException(502, f"Trainer failed to start: {e}")
+        _live.update(job_id=job["id"], proc=p, hf_key=hf_key)
+        _update_job(job["id"], {"status": "running", "started": time.time()})
+        _live["poll_task"] = asyncio.get_running_loop().create_task(_poll_loop(job["id"]))
+
+
+async def _poll_loop(job_id: str) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            while True:
+                await asyncio.sleep(1)
+                p = _live["proc"]
+                if p is None:
+                    return
+                if p.poll() is not None:
+                    _update_job(job_id, {"status": "error", "finished": time.time(),
+                                         "error": "trainer process died — check server logs"})
+                    break
+                try:
+                    st = (await client.get(f"http://127.0.0.1:{PORT}/status")).json()
+                except httpx.HTTPError:
+                    continue
+                patch = {"step": st["step"], "loss": st["loss"],
+                         "sec_per_step": st["sec_per_step"], "checkpoints": st["checkpoints"]}
+                if st["state"] in ("done", "error", "cancelled"):
+                    patch["status"] = st["state"]
+                    patch["finished"] = time.time()
+                    patch["error"] = st.get("error")
+                    job = _update_job(job_id, patch)
+                    events.publish({"type": "training", "job": _public(job)})
+                    if st["state"] == "done" and job.get("hf_push"):
+                        await _push_to_hf(job)
+                    break
+                job = _update_job(job_id, patch)
+                events.publish({"type": "training", "job": _public(job)})
+    finally:
+        await proc.stop(_live["proc"], PORT)
+        _live.update(job_id=None, proc=None, poll_task=None, hf_key=None)
+        events.publish({"type": "training", "job": _public(_job(job_id))})
+
+
+async def _push_to_hf(job: dict) -> None:
+    push = job["hf_push"]
+    if config.MOCK:
+        events.publish({"type": "training_push", "job_id": job["id"], "status": "skipped",
+                        "detail": "mock mode — no real upload"})
+        return
+    key = _live["hf_key"]
+    if not key:
+        events.publish({"type": "training_push", "job_id": job["id"], "status": "error",
+                        "detail": "HF key no longer in memory (backend restarted?) — push manually"})
+        return
+    def _do():
+        from huggingface_hub import HfApi
+        api = HfApi(token=key)
+        api.create_repo(push["repo_id"], private=push["private"], exist_ok=True, repo_type="model")
+        api.upload_folder(folder_path=str(job_dir(job["id"]) / "checkpoints"),
+                          repo_id=push["repo_id"], repo_type="model")
+    try:
+        await asyncio.to_thread(_do)
+        events.publish({"type": "training_push", "job_id": job["id"], "status": "done",
+                        "repo": push["repo_id"]})
+    except Exception as e:
+        events.publish({"type": "training_push", "job_id": job["id"], "status": "error",
+                        "detail": str(e)[:300]})
+
+
+@router.post("/jobs/{job_id}/checkpoint")
+async def manual_checkpoint(job_id: str):
+    if _live["job_id"] != job_id:
+        raise HTTPException(409, "Job is not running")
+    async with httpx.AsyncClient(timeout=10) as client:
+        (await client.post(f"http://127.0.0.1:{PORT}/checkpoint")).raise_for_status()
+    return {"ok": True, "detail": "Checkpoint will be saved at the next step"}
+
+
+@router.post("/jobs/{job_id}/cancel")
+async def cancel_job(job_id: str):
+    if _live["job_id"] != job_id:
+        raise HTTPException(409, "Job is not running")
+    async with httpx.AsyncClient(timeout=10) as client:
+        (await client.post(f"http://127.0.0.1:{PORT}/cancel")).raise_for_status()
+    return {"ok": True}
+
+
+@router.delete("/jobs/{job_id}")
+def delete_job(job_id: str):
+    _job(job_id)
+    if _live["job_id"] == job_id:
+        raise HTTPException(409, "Cancel the job before deleting it")
+    d = job_dir(job_id)
+    if d.exists():
+        shutil.rmtree(d)
+    _save_jobs([j for j in _jobs() if j["id"] != job_id])
+    return {"ok": True}
+
+
+@router.get("/jobs/{job_id}/files/{path:path}")
+def get_file(job_id: str, path: str):
+    _job(job_id)
+    p = job_dir(job_id) / path
+    if not path_inside(job_dir(job_id), p) or not p.is_file():
+        raise HTTPException(404, "No such file")
+    if p.suffix not in (".safetensors", ".png", ".jpg", ".log", ".json"):
+        raise HTTPException(403, "File type not served")
+    return FileResponse(p)
+
+
+class ToLorasBody(BaseModel):
+    checkpoint_file: str
+
+
+@router.post("/jobs/{job_id}/to-loras")
+def checkpoint_to_loras(job_id: str, body: ToLorasBody):
+    """Copy a checkpoint into the LoRA library so it's usable in generation."""
+    job = _job(job_id)
+    ckpt = next((c for c in job["checkpoints"] if c["file"] == body.checkpoint_file), None)
+    if not ckpt:
+        raise HTTPException(404, "No such checkpoint")
+    src = job_dir(job_id) / ("checkpoints" if "/" not in ckpt["file"] else "") / ckpt["file"]
+    if not path_inside(job_dir(job_id), src) or not src.exists():
+        raise HTTPException(404, "Checkpoint file missing on disk")
+    slug = re.sub(r"[^A-Za-z0-9-]+", "-", job["name"].lower()).strip("-") or job_id
+    dest = config.LORAS_DIR / safe_filename(f"{slug}-step{ckpt['step']}.safetensors")
+    shutil.copyfile(src, dest)
+    atomic_write_json(dest.with_suffix(dest.suffix + ".json"), {
+        "source": {"kind": "training", "job_id": job_id, "step": ckpt["step"]},
+        "label": f"{job['name']} @ {ckpt['step']}",
+        "downloaded": time.time(),
+    })
+    return {"ok": True, "file": dest.name}
+
+
+async def shutdown() -> None:
+    if _live["poll_task"]:
+        _live["poll_task"].cancel()
+    await proc.stop(_live["proc"], PORT)

@@ -1,0 +1,66 @@
+{
+  "models": [
+    {
+      "id": "z-image-base",
+      "name": "Z Image Base",
+      "family": "zimage",
+      "kind": "txt2img",
+      "repo_id": "Tongyi-MAI/Z-Image",
+      "reqs": "z-image.txt",
+      "defaults": { "steps": 28, "cfg": 3.5, "width": 1024, "height": 1024, "seed": -1 },
+      "notes": "Undistilled foundation model — quality outputs and training compatibility. 28–50 steps, cfg 3–5.",
+      "trainable": true
+    },
+    {
+      "id": "z-image-turbo",
+      "name": "Z Image Turbo",
+      "family": "zimage",
+      "kind": "txt2img",
+      "repo_id": "Tongyi-MAI/Z-Image-Turbo",
+      "reqs": "z-image.txt",
+      "defaults": { "steps": 8, "cfg": 0, "width": 1024, "height": 1024, "seed": -1 },
+      "notes": "High-speed distilled model. CFG defaults to 0."
+    },
+    {
+      "id": "qwen-image-2512",
+      "name": "Qwen Image 2512",
+      "family": "qwen-image",
+      "kind": "txt2img",
+      "repo_id": "Qwen/Qwen-Image-2512",
+      "reqs": "qwen-image.txt",
+      "defaults": { "steps": 30, "cfg": 4.0, "width": 1024, "height": 1024, "seed": -1 },
+      "notes": "Qwen image generation model (Dec 2025 update).",
+      "trainable": true
+    },
+    {
+      "id": "qwen-image-edit-2511",
+      "name": "Qwen Image Edit 2511",
+      "family": "qwen-image-edit",
+      "kind": "edit",
+      "repo_id": "Qwen/Qwen-Image-Edit-2511",
+      "reqs": "qwen-image.txt",
+      "defaults": { "steps": 30, "cfg": 4.0, "width": 1024, "height": 1024, "seed": -1 },
+      "notes": "Image editing model. Requires a reference image."
+    }
+  ],
+  "components": {
+    "captioner": {
+      "id": "captioner",
+      "name": "Qwen2.5-VL Captioner",
+      "repo_id": "Qwen/Qwen2.5-VL-3B-Instruct",
+      "reqs": "captioner.txt"
+    },
+    "trainer": {
+      "id": "trainer",
+      "name": "LoRA Trainer (ai-toolkit)",
+      "repo_id": null,
+      "reqs": "trainer.txt"
+    }
+  },
+  "moderation_source": {
+    "repo_id": "AdamCodd/vit-base-nsfw-detector",
+    "onnx_file": "onnx/model.onnx",
+    "labels": { "input_size": 384, "labels": ["sfw", "nsfw"], "blocked": ["nsfw"],
+                "threshold": 0.7, "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5] }
+  }
+}

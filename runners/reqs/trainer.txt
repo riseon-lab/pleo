@@ -1,0 +1,20 @@
+# LoRA trainer env. Real training shells out to ostris/ai-toolkit, which is
+# expected to be CLONED (not pip-installed) at $AI_TOOLKIT_DIR
+# (default /workspace/ai-toolkit):
+#
+#   git clone https://github.com/ostris/ai-toolkit /workspace/ai-toolkit
+#   <this venv>/bin/pip install -r /workspace/ai-toolkit/requirements.txt
+#
+# The deps below cover the common ai-toolkit requirements; on the pod, prefer
+# installing ai-toolkit's own requirements.txt into this venv (command above)
+# so versions match the cloned revision.
+diffusers>=0.36.0
+transformers>=4.51.0
+accelerate>=1.2.0
+safetensors>=0.4.5
+peft>=0.14.0
+bitsandbytes
+pyyaml
+oyaml
+pillow
+einops

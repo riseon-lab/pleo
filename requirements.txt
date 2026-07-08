@@ -1,0 +1,5 @@
+# Pleo backend — keep lean; model deps live in per-model venvs (runners/reqs/*)
+fastapi==0.115.6
+uvicorn==0.34.0
+httpx==0.28.1
+huggingface_hub==0.27.1

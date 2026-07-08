@@ -1,0 +1,9 @@
+# Z Image family (Base + Turbo). torch/torchvision come from the container
+# via --system-site-packages.
+diffusers>=0.36.0
+transformers>=4.51.0
+accelerate>=1.2.0
+safetensors>=0.4.5
+sentencepiece
+peft>=0.14.0
+pillow
