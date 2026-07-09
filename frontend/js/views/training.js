@@ -13,12 +13,14 @@ export async function render(root) {
   const trainable = models.filter(m => m.trainable);
 
   const jobsHost = h('div', {});
-  root.append(
+  const envCard = mock ? null : trainerEnvCard();
+  root.append(...[
     h('div', { class: 'view-head' }, h('h1', {}, 'Training'),
       mock ? h('span', { class: 'badge warn' }, 'mock mode') : null),
+    envCard,
     newJobCard(trainable, datasets, meta),
     h('h2', { class: 'section-gap' }, 'Jobs'),
-    jobsHost);
+    jobsHost].filter(Boolean));
 
   let jobList = jobs;
   drawJobs();
@@ -35,6 +37,11 @@ export async function render(root) {
   }
 
   const off = onEvent((ev) => {
+    if (ev.type === 'env' && ev.model_id === 'trainer' && envCard) {
+      if (ev.status === 'ready') toast('Trainer environment ready', 'success');
+      if (ev.status === 'error') toast(`Trainer env failed: ${ev.detail}`, 'error');
+      envCard.refresh();
+    }
     if (ev.type === 'training') {
       const i = jobList.findIndex(j => j.id === ev.job.id);
       if (i >= 0) jobList[i] = ev.job; else jobList.unshift(ev.job);
@@ -47,6 +54,49 @@ export async function render(root) {
     }
   });
   return off;
+}
+
+// ---------------- trainer environment (real mode) ----------------
+
+function trainerEnvCard() {
+  const status = h('span', { class: 'badge' }, '…');
+  const detail = h('span', { class: 'muted' }, '');
+  const createBtn = h('button', { class: 'btn small ghost' }, 'Create env');
+  const deleteBtn = h('button', { class: 'btn small danger', hidden: true }, 'Delete env');
+  const card = h('div', { class: 'card', style: 'margin-bottom:16px' },
+    h('h3', {}, 'Trainer environment'),
+    h('p', { class: 'muted' },
+      'Isolated venv for ai-toolkit. Also clone it on the volume once: git clone https://github.com/ostris/ai-toolkit /workspace/ai-toolkit'),
+    h('div', { class: 'row gap', style: 'flex-wrap:wrap' }, status, createBtn, deleteBtn, detail));
+
+  card.refresh = async () => {
+    const envs = await api('/api/envs');
+    const s = envs.trainer || { status: 'none', detail: '' };
+    status.textContent = `env ${s.status}`;
+    status.className = `badge ${s.status === 'ready' ? 'ok' : s.status === 'none' ? '' : s.status === 'error' ? 'err' : 'busy'}`;
+    detail.textContent = ['creating', 'installing'].includes(s.status) ? (s.detail || '') : (s.status === 'error' ? s.detail : '');
+    createBtn.hidden = s.status === 'ready';
+    createBtn.disabled = ['creating', 'installing'].includes(s.status);
+    createBtn.textContent = createBtn.disabled ? 'Installing…' : s.status === 'error' ? 'Retry env install' : 'Create env';
+    deleteBtn.hidden = !['ready', 'error'].includes(s.status);
+    createBtn.onclick = async () => {
+      createBtn.disabled = true;
+      try {
+        if (s.status === 'error') await api('/api/envs/trainer', { method: 'DELETE' });
+        await api('/api/envs/trainer/create', { method: 'POST' });
+        toast('Trainer environment install started');
+      } catch (e) { toast(e.message, 'error'); }
+      card.refresh();
+    };
+    deleteBtn.onclick = async () => {
+      if (!await confirmModal('Delete trainer env', 'Remove the trainer virtual environment from disk?')) return;
+      try { await api('/api/envs/trainer', { method: 'DELETE' }); toast('Trainer env deleted', 'success'); }
+      catch (e) { toast(e.message, 'error'); }
+      card.refresh();
+    };
+  };
+  card.refresh();
+  return card;
 }
 
 // ---------------- new job form ----------------

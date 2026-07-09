@@ -39,6 +39,10 @@ def get_component(comp_id: str) -> dict:
     return comp
 
 
+def all_components() -> list[dict]:
+    return list(_raw().get("components", {}).values())
+
+
 def moderation_source() -> dict:
     return _raw().get("moderation_source", {})
 

@@ -83,8 +83,8 @@ def _create_env_worker(model: dict) -> None:
 
 @router.get("")
 def list_envs():
-    from .registry import all_models
-    return {m["id"]: env_status(m["id"]) for m in all_models()}
+    from .registry import all_components, all_models
+    return {c["id"]: env_status(c["id"]) for c in all_models() + all_components()}
 
 
 @router.post("/{model_id}/create")

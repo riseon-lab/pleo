@@ -76,26 +76,61 @@ async function renderDetail(body, dsId, offs) {
 
   const back = h('button', { class: 'btn ghost small', onclick: () => { openDatasetId = null; rerender(body, offs); } }, '← Datasets');
 
-  // --- captioner panel ---
+  // --- captioner panel (full lifecycle: env → weights → start/stop) ---
   const capStatus = h('span', { class: 'badge' }, '…');
+  const envBtn = h('button', { class: 'btn small ghost', hidden: true }, 'Create env');
   const capBtn = h('button', { class: 'btn small ghost' }, '…');
+  const weightsBtn = h('button', { class: 'btn small danger', hidden: true }, 'Delete weights');
   const autoBtn = h('button', { class: 'btn small' }, 'Auto-caption');
   const overwrite = h('input', { type: 'checkbox' });
   const capProgress = h('span', { class: 'muted' }, '');
+  const capDetail = h('p', { class: 'muted', style: 'margin:8px 0 0' }, '');
 
   async function refreshCaptioner() {
     const s = await api('/api/captioner');
+    const mockEnv = s.env === 'mock';
+    const envReady = mockEnv || s.env === 'ready';
     const settled = s.status === 'stopped' || s.status === 'ready' || s.status === 'busy';
-    capStatus.textContent = `${s.status}${s.env !== 'mock' ? ` · env ${s.env}` : ''}`;
+    capStatus.textContent = `${s.status}${mockEnv ? '' : ` · env ${s.env}`}`;
     capStatus.className = `badge ${s.status === 'ready' ? 'ok' : s.status === 'stopped' ? '' : 'busy'}`;
+    capDetail.textContent = s.env === 'installing' || s.env === 'creating'
+      ? (s.env_detail || 'Installing environment…')
+      : `${s.model}${s.weights === 'downloaded' ? ` · weights ${fmtBytes(s.weights_bytes)} on disk` : mockEnv ? '' : ' · weights download on first start'}`;
+
+    // Env creation (real mode only)
+    envBtn.hidden = mockEnv || envReady;
+    envBtn.disabled = s.env === 'creating' || s.env === 'installing';
+    envBtn.textContent = envBtn.disabled ? 'Installing env…'
+      : s.env === 'error' ? 'Retry env install' : 'Create env';
+    envBtn.onclick = async () => {
+      envBtn.disabled = true;
+      try {
+        if (s.env === 'error') await api('/api/envs/captioner', { method: 'DELETE' });
+        await api('/api/envs/captioner/create', { method: 'POST' });
+        toast('Captioner environment install started');
+      } catch (e) { toast(e.message, 'error'); }
+      refreshCaptioner();
+    };
+
+    // Start / stop
     capBtn.textContent = s.status === 'stopped' ? 'Start captioner'
       : settled ? 'Stop captioner' : 'Starting…';
-    capBtn.disabled = !settled;
+    capBtn.disabled = !settled || (s.status === 'stopped' && !envReady);
     autoBtn.disabled = !(s.status === 'ready' || s.status === 'busy');
     capBtn.onclick = async () => {
       capBtn.disabled = true;
       capBtn.textContent = s.status === 'stopped' ? 'Starting…' : 'Stopping…';
       try { await api(`/api/captioner/${s.status === 'stopped' ? 'start' : 'stop'}`, { method: 'POST' }); }
+      catch (e) { toast(e.message, 'error'); }
+      refreshCaptioner();
+    };
+
+    // Delete weights (free disk space; only when stopped)
+    weightsBtn.hidden = !(s.weights === 'downloaded' && s.status === 'stopped');
+    weightsBtn.onclick = async () => {
+      if (!await confirmModal('Delete captioner weights',
+        `Remove ${s.model} weights (${fmtBytes(s.weights_bytes)}) from disk? They re-download on next start.`)) return;
+      try { await api('/api/captioner/weights', { method: 'DELETE' }); toast('Captioner weights deleted', 'success'); }
       catch (e) { toast(e.message, 'error'); }
       refreshCaptioner();
     };
@@ -191,9 +226,10 @@ async function renderDetail(body, dsId, offs) {
     h('div', { class: 'card', style: 'margin-bottom:16px' },
       h('h3', {}, 'Captions'),
       h('div', { class: 'row gap', style: 'flex-wrap:wrap' },
-        capStatus, capBtn, autoBtn,
+        capStatus, envBtn, capBtn, weightsBtn, autoBtn,
         h('label', { class: 'row gap', style: 'gap:6px' }, overwrite, h('span', { class: 'muted' }, 'overwrite existing')),
         capProgress),
+      capDetail,
       h('div', { class: 'row gap', style: 'margin-top:12px; flex-wrap:wrap' },
         h('span', { class: 'muted', style: 'min-width:90px' }, 'Trigger word'),
         h('div', { style: 'width:200px' }, trigger), saveTrigger, applyTrigger)),
@@ -203,6 +239,11 @@ async function renderDetail(body, dsId, offs) {
 
   offs.push(onEvent((ev) => {
     if (ev.type === 'captioner') refreshCaptioner();
+    if (ev.type === 'env' && ev.model_id === 'captioner') {
+      if (ev.status === 'ready') toast('Captioner environment ready', 'success');
+      if (ev.status === 'error') toast(`Captioner env failed: ${ev.detail}`, 'error');
+      refreshCaptioner();
+    }
     if (ev.type === 'autocaption' && ev.dataset_id === dsId) {
       if (ev.status === 'running') capProgress.textContent = `${ev.done}/${ev.total}`;
       if (ev.status === 'done') { capProgress.textContent = ''; toast('Auto-captioning finished', 'success'); rerender(body, offs); }

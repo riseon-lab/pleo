@@ -286,8 +286,17 @@ check("trigger prepended to existing caption", cap0.startswith("zxq99, a manual 
 # captioner + autocaption
 r = c.post(f"/api/datasets/{ds_id}/autocaption", headers=H, json={"overwrite": True})
 check("autocaption without captioner rejected", r.status_code == 409, r.text)
+envs = c.get("/api/envs", headers=H).json()
+check("envs list includes captioner + trainer components",
+      "captioner" in envs and "trainer" in envs and "z-image-base" in envs, str(envs.keys()))
+r = c.get("/api/captioner", headers=H)
+check("captioner status exposes weights info", "weights" in r.json() and "weights_bytes" in r.json(), r.text)
+r = c.delete("/api/captioner/weights", headers=H)
+check("captioner weights delete (no-op ok)", r.status_code == 200, r.text)
 r = c.post("/api/captioner/start", headers=H)
 check("captioner starts (mock)", r.status_code == 200 and r.json()["status"] == "ready", r.text)
+r = c.delete("/api/captioner/weights", headers=H)
+check("weights delete blocked while running", r.status_code == 409, r.text)
 r = c.post(f"/api/datasets/{ds_id}/autocaption", headers=H, json={"overwrite": True})
 check("autocaption queued", r.status_code == 200 and r.json()["queued"] == 3, r.text)
 deadline = time.time() + 30

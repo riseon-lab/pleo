@@ -3,7 +3,6 @@ generation models: own venv, start/stop, deletable weights."""
 import asyncio
 import base64
 import shutil
-from typing import Optional
 
 import httpx
 from fastapi import APIRouter, HTTPException
@@ -27,11 +26,17 @@ def status() -> dict:
         _state["proc"] = None
     comp = get_component("captioner")
     d = config.HF_CACHE_DIR / "hub" / ("models--" + comp["repo_id"].replace("/", "--"))
+    env = {"status": "mock", "detail": ""} if config.MOCK else env_status("captioner")
+    weights_bytes = 0
+    if (d / "snapshots").exists():
+        weights_bytes = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
     return {
         "status": _state["status"],
         "model": comp["repo_id"],
-        "env": "mock" if config.MOCK else env_status("captioner")["status"],
-        "weights": "downloaded" if (d / "snapshots").exists() and any((d / "snapshots").iterdir()) else "none",
+        "env": env["status"],
+        "env_detail": env["detail"],
+        "weights": "downloaded" if weights_bytes else "none",
+        "weights_bytes": weights_bytes,
     }
 
 
