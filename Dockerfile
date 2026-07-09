@@ -21,7 +21,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pre-cache torch/torchvision system-wide; model venvs are created with
 # --system-site-packages so they share this install.
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install torch==2.9.1 torchvision==0.24.1 \
+    python3 -m pip install torch==2.9.1 torchvision==0.24.1 torchaudio \
     --index-url https://download.pytorch.org/whl/cu128
 
 # Backend deps (small).

@@ -140,6 +140,28 @@ def _toolkit_worker() -> None:
         if chk_cv.returncode != 0:
             raise RuntimeError(f"cv2 still not importable: {chk_cv.stderr[-250:]}")
 
+        # ai-toolkit assumes the full torch trio; the image ships only
+        # torch+torchvision. Install torchaudio matched EXACTLY to the venv's
+        # torch build so pip can't swap torch out from under us.
+        chk_ta = subprocess.run([py, "-c", "import torchaudio"],
+                                capture_output=True, text=True, timeout=120)
+        if chk_ta.returncode != 0:
+            ver = subprocess.run([py, "-c", "import torch; print(torch.__version__)"],
+                                 capture_output=True, text=True, timeout=120).stdout.strip()
+            base_ver, _, cuda_tag = ver.partition("+")  # e.g. 2.9.1 + cu128
+            _toolkit.update(detail=f"installing torchaudio=={ver} to match torch")
+            pub()
+            cmd = [py, "-m", "pip", "install", f"torchaudio=={ver}" if cuda_tag else f"torchaudio=={base_ver}"]
+            if cuda_tag:
+                cmd += ["--index-url", f"https://download.pytorch.org/whl/{cuda_tag}"]
+            r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+            if r.returncode != 0:
+                raise RuntimeError(f"torchaudio install failed: {r.stderr[-250:]}")
+            chk_ta = subprocess.run([py, "-c", "import torchaudio"],
+                                    capture_output=True, text=True, timeout=120)
+            if chk_ta.returncode != 0:
+                raise RuntimeError(f"torchaudio still not importable: {chk_ta.stderr[-250:]}")
+
         # Sanity: torch must import inside the trainer venv and see the GPU
         # (ai-toolkit's requirements may have replaced the shared torch).
         chk = subprocess.run([py, "-c", "import torch; print(torch.__version__, torch.cuda.is_available())"],
