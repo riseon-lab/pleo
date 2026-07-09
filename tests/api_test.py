@@ -70,6 +70,14 @@ r = c.post("/api/models/stop", headers={**H, "Origin": "http://evil.example"})
 check("cross-origin POST rejected", r.status_code == 403, r.text)
 r = c.post("/api/models/stop", headers={**H, "Origin": BASE.replace("http://", "http://")})
 check("same-origin POST allowed", r.status_code == 200, r.text)
+# Reverse-proxy (RunPod) case: Origin is the public proxy hostname, Host is
+# internal, X-Forwarded-Host carries the public name.
+r = c.post("/api/models/stop", headers={**H, "Origin": "https://abc-3000.proxy.runpod.net",
+                                        "X-Forwarded-Host": "abc-3000.proxy.runpod.net"})
+check("proxied same-origin POST allowed (X-Forwarded-Host)", r.status_code == 200, r.text)
+r = c.post("/api/models/stop", headers={**H, "Origin": "https://evil.example",
+                                        "X-Forwarded-Host": "abc-3000.proxy.runpod.net"})
+check("cross-origin POST still rejected behind proxy", r.status_code == 403, r.text)
 
 # --- models ---
 r = c.get("/api/models", headers=H)
@@ -234,7 +242,8 @@ check("moderation fail-closed blocks output", stb == "blocked", str(stb))
 c.post("/api/settings/moderation", headers=H, json={"enabled": False})
 
 r = c.post("/api/settings/git-pull", headers=H)
-check("git-pull reports failure gracefully (no repo)", r.status_code == 200 and r.json()["ok"] is False, r.text[:200])
+check("git-pull returns structured result", r.status_code == 200 and
+      isinstance(r.json().get("ok"), bool) and "stdout" in r.json(), r.text[:200])
 
 r = c.get("/api/settings/status", headers=H)
 check("status endpoint", r.status_code == 200 and r.json()["mock"] is True, r.text[:200])

@@ -25,17 +25,32 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="Pleo", lifespan=lifespan)
 
 
+def _strip_default_port(netloc: str) -> str:
+    netloc = netloc.lower()
+    for suffix in (":443", ":80"):
+        if netloc.endswith(suffix):
+            return netloc[: -len(suffix)]
+    return netloc
+
+
 @app.middleware("http")
 async def same_origin_guard(request: Request, call_next):
     """Defense-in-depth CSRF guard: browsers always send Origin on
-    cross-origin state-changing requests; reject mismatches. Non-browser
-    clients (no Origin header) pass through — auth still applies."""
+    cross-origin state-changing requests; reject mismatches. Behind a
+    reverse proxy (RunPod) the external hostname arrives via
+    X-Forwarded-Host, so match against that too — an attacker's browser
+    still can't forge Origin, so the guard holds. Non-browser clients
+    (no Origin header) pass through — auth still applies."""
     if request.method in ("POST", "PUT", "DELETE", "PATCH"):
         origin = request.headers.get("origin")
-        host = request.headers.get("host")
-        if origin and host:
+        if origin and origin != "null":
             from urllib.parse import urlsplit
-            if urlsplit(origin).netloc != host:
+            origin_host = _strip_default_port(urlsplit(origin).netloc)
+            candidates = {_strip_default_port(h.strip())
+                          for header in ("host", "x-forwarded-host")
+                          for h in (request.headers.get(header) or "").split(",")
+                          if h.strip()}
+            if origin_host not in candidates:
                 return JSONResponse({"detail": "Cross-origin request rejected"}, status_code=403)
     return await call_next(request)
 
