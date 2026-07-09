@@ -123,10 +123,15 @@ def _toolkit_worker() -> None:
         # the headless build is API-identical and dependency-free.
         _toolkit.update(detail="swapping opencv for headless build (no libGL needed)")
         pub()
+        # Remove EVERY opencv variant first — mixed installs share the cv2/
+        # directory, so a partial uninstall leaves a package that pip thinks
+        # is installed but whose files are gone.
         subprocess.run([py, "-m", "pip", "uninstall", "-y",
-                        "opencv-python", "opencv-contrib-python"],
+                        "opencv-python", "opencv-contrib-python",
+                        "opencv-python-headless", "opencv-contrib-python-headless"],
                        capture_output=True, text=True, timeout=300)
-        r = subprocess.run([py, "-m", "pip", "install", "opencv-python-headless"],
+        r = subprocess.run([py, "-m", "pip", "install", "--force-reinstall",
+                            "--no-deps", "opencv-python-headless"],
                            capture_output=True, text=True, timeout=600)
         if r.returncode != 0:
             raise RuntimeError(f"opencv-headless install failed: {r.stderr[-250:]}")
