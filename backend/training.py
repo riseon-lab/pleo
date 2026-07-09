@@ -357,18 +357,22 @@ async def _poll_loop(job_id: str) -> None:
                 except httpx.HTTPError:
                     continue
                 patch = {"step": st["step"], "loss": st["loss"],
-                         "sec_per_step": st["sec_per_step"], "checkpoints": st["checkpoints"]}
+                         "sec_per_step": st["sec_per_step"], "checkpoints": st["checkpoints"],
+                         "loss_history": st.get("loss_history", []),
+                         "samples": st.get("samples", [])}
+                # log_tail rides the event stream only — no point persisting it
+                log_tail = st.get("log_tail", [])
                 if st["state"] in ("done", "error", "cancelled"):
                     patch["status"] = st["state"]
                     patch["finished"] = time.time()
                     patch["error"] = st.get("error")
                     job = _update_job(job_id, patch)
-                    events.publish({"type": "training", "job": _public(job)})
+                    events.publish({"type": "training", "job": _public(job), "log_tail": log_tail})
                     if st["state"] == "done" and job.get("hf_push"):
                         await _push_to_hf(job)
                     break
                 job = _update_job(job_id, patch)
-                events.publish({"type": "training", "job": _public(job)})
+                events.publish({"type": "training", "job": _public(job), "log_tail": log_tail})
     finally:
         await proc.stop(_live["proc"], PORT)
         _live.update(job_id=None, proc=None, poll_task=None, hf_key=None)

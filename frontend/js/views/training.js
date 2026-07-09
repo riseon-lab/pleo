@@ -5,6 +5,8 @@ import { h, clear, toast, confirmModal, fmtBytes, lightbox, modal } from '../ui.
 import { getApiKeys } from './settings.js';
 
 const RATE_KEY = 'pleo-runpod-rate';
+const liveTails = new Map();   // job id -> latest log_tail from SSE
+const sampleURLs = new Map();  // "jobId/file" -> objectURL (decode once)
 const VRAM_KEY = 'pleo-vram-profile';
 
 const VRAM_LABELS = {
@@ -55,6 +57,7 @@ export async function render(root) {
       if (ev.status === 'error') toast(`ai-toolkit install failed: ${ev.detail}`, 'error');
     }
     if (ev.type === 'training') {
+      if (ev.log_tail) liveTails.set(ev.job.id, ev.log_tail);
       const i = jobList.findIndex(j => j.id === ev.job.id);
       if (i >= 0) jobList[i] = ev.job; else jobList.unshift(ev.job);
       drawJobs();
@@ -299,13 +302,7 @@ function jobCard(job, refresh) {
   for (const c of [...(job.checkpoints || [])].reverse()) {
     const sampleRow = h('div', { class: 'row gap' });
     for (const s of (c.samples || []).slice(0, 4)) {
-      const img = h('img', { class: 'ckpt-sample', alt: s });
-      apiBlob(`/api/training/jobs/${job.id}/files/samples/${encodeURIComponent(s)}`)
-        .then(r => r.blob()).then(b => {
-          img.src = URL.createObjectURL(b);
-          img.onclick = () => lightbox(img.src, { metaEl: h('span', {}, `step ${c.step}`) });
-        }).catch(() => img.remove());
-      sampleRow.append(img);
+      sampleRow.append(sampleThumb(job.id, { step: c.step, file: s }));
     }
     ckpts.append(h('div', { class: 'list-row' },
       h('span', { class: 'mono', style: 'width:90px' }, `step ${c.step}`),
@@ -337,8 +334,88 @@ function jobCard(job, refresh) {
         (job.sec_per_step ? ` · ${job.sec_per_step}s/step` : '')),
       h('span', {}, etaText)),
     job.error ? h('p', { class: 'muted', style: 'color:var(--danger)' }, job.error) : null,
+    lossChart(job.loss_history || []),
+    (job.samples || []).length ? h('div', { class: 'section-gap' },
+      h('h3', {}, 'Samples'),
+      h('div', { class: 'row gap', style: 'flex-wrap:wrap' },
+        (job.samples || []).slice(-12).reverse().map(s => sampleThumb(job.id, s)))) : null,
+    job.status === 'running' && liveTails.get(job.id)?.length ? (() => {
+      const pre = h('pre', { class: 'output activity' }, liveTails.get(job.id).join('\n'));
+      setTimeout(() => { pre.scrollTop = pre.scrollHeight; });
+      return h('div', { class: 'section-gap' }, h('h3', {}, 'Activity'), pre);
+    })() : null,
     (job.checkpoints || []).length ? h('div', { class: 'section-gap' }, h('h3', {}, 'Checkpoints'), ckpts) : null,
     h('div', { class: 'row gap', style: 'margin-top:12px' }, actions));
+}
+
+// Single-series loss line: ink-colored 2px line on the card surface,
+// recessive grid, min/max in muted text, direct label on the latest value,
+// crosshair tooltip on hover.
+function lossChart(history) {
+  const W = 600, H = 96, PAD = { l: 6, r: 66, t: 10, b: 8 };
+  const pts = history.filter(p => p && p[1] != null);
+  if (pts.length < 2) return null;
+  const steps = pts.map(p => p[0]), losses = pts.map(p => p[1]);
+  const xMin = steps[0], xMax = steps[steps.length - 1];
+  const yMin = Math.min(...losses), yMax = Math.max(...losses);
+  const ySpan = (yMax - yMin) || 1e-9;
+  const X = s => PAD.l + (s - xMin) / ((xMax - xMin) || 1) * (W - PAD.l - PAD.r);
+  const Y = v => PAD.t + (1 - (v - yMin) / ySpan) * (H - PAD.t - PAD.b);
+  const d = pts.map((p, i) => `${i ? 'L' : 'M'}${X(p[0]).toFixed(1)},${Y(p[1]).toFixed(1)}`).join('');
+  const last = pts[pts.length - 1];
+
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+  svg.setAttribute('class', 'loss-chart');
+  svg.innerHTML = `
+    <line x1="${PAD.l}" y1="${Y(yMin)}" x2="${W - PAD.r}" y2="${Y(yMin)}" stroke="#E6E6EB" stroke-width="1"/>
+    <line x1="${PAD.l}" y1="${Y(yMax)}" x2="${W - PAD.r}" y2="${Y(yMax)}" stroke="#E6E6EB" stroke-width="1"/>
+    <text x="${W - PAD.r + 6}" y="${Y(yMax) + 4}" class="chart-label">${yMax.toFixed(3)}</text>
+    <text x="${W - PAD.r + 6}" y="${Y(yMin) + 4}" class="chart-label">${yMin.toFixed(3)}</text>
+    <path d="${d}" fill="none" stroke="#111111" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    <circle cx="${X(last[0])}" cy="${Y(last[1])}" r="3" fill="#111111"/>
+    <text x="${W - PAD.r + 6}" y="${Math.max(PAD.t + 8, Math.min(H - 4, Y(last[1]) + 4))}" class="chart-label chart-label-strong">${last[1].toFixed(4)}</text>`;
+  const hoverDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+  hoverDot.setAttribute('r', '3.5'); hoverDot.setAttribute('fill', '#111111');
+  hoverDot.setAttribute('stroke', '#FFFFFF'); hoverDot.setAttribute('stroke-width', '2');
+  hoverDot.style.display = 'none';
+  svg.append(hoverDot);
+  const tip = h('div', { class: 'chart-tip', hidden: true });
+  const wrap = h('div', { class: 'loss-chart-wrap' },
+    h('div', { class: 'muted', style: 'font-size:12px;margin-bottom:2px' }, 'loss'), svg, tip);
+  svg.addEventListener('mousemove', (e) => {
+    const rect = svg.getBoundingClientRect();
+    const step = xMin + (e.clientX - rect.left) / rect.width * (xMax - xMin);
+    let best = 0;
+    for (let i = 1; i < pts.length; i++) if (Math.abs(pts[i][0] - step) < Math.abs(pts[best][0] - step)) best = i;
+    const p = pts[best];
+    hoverDot.setAttribute('cx', X(p[0])); hoverDot.setAttribute('cy', Y(p[1]));
+    hoverDot.style.display = '';
+    tip.hidden = false;
+    tip.textContent = `step ${p[0]} · loss ${p[1].toFixed(4)}`;
+    tip.style.left = `${Math.min(rect.width - 130, Math.max(0, e.clientX - rect.left + 8))}px`;
+  });
+  svg.addEventListener('mouseleave', () => { hoverDot.style.display = 'none'; tip.hidden = true; });
+  return wrap;
+}
+
+function sampleThumb(jobId, s) {
+  const key = `${jobId}/${s.file}`;
+  const img = h('img', { class: 'ckpt-sample', alt: s.file, title: s.step != null ? `step ${s.step}` : s.file });
+  const attach = (url) => {
+    img.src = url;
+    img.onclick = () => lightbox(url, { metaEl: h('span', {}, s.step != null ? `step ${s.step}` : s.file) });
+  };
+  if (sampleURLs.has(key)) attach(sampleURLs.get(key));
+  else {
+    const path = s.file.split('/').map(encodeURIComponent).join('/');
+    apiBlob(`/api/training/jobs/${jobId}/files/${path}`).then(r => r.blob()).then(b => {
+      const url = URL.createObjectURL(b);
+      sampleURLs.set(key, url);
+      attach(url);
+    }).catch(() => img.remove());
+  }
+  return img;
 }
 
 function fmtDuration(s) {

@@ -32,10 +32,19 @@ STATE = {
     "state": "idle",  # idle|running|done|error|cancelled
     "step": 0, "total": 0, "loss": None, "sec_per_step": None,
     "checkpoints": [],  # [{step, file, samples: [names]}]
+    "loss_history": [],  # [[step, loss], ...] — decimated in /status
+    "samples": [],       # [{step, file}] — every sample, incl. non-checkpoint ones
+    "log_tail": [],      # last lines of trainer output for the live activity trail
     "error": None,
     "cancel": False, "manual_save": False,
     "thread": None,
 }
+
+_LOG_TAIL_MAX = 30
+
+
+def _log_line(text: str) -> None:
+    STATE["log_tail"] = (STATE["log_tail"] + [text])[-_LOG_TAIL_MAX:]
 
 
 def job_dir() -> Path:
@@ -58,8 +67,10 @@ def _save_checkpoint(step: int, job: dict) -> None:
             png = _mock_frame(256, 256, hash((step, i)) & 0x7FFFFFFF, prompt,
                               min(1.0, step / max(1, STATE["total"])))
             (samples_dir / name).write_bytes(png)
-        samples.append(name)
+        samples.append(f"samples/{name}")
+        STATE["samples"].append({"step": step, "file": f"samples/{name}"})
     STATE["checkpoints"].append({"step": step, "file": fname, "samples": samples})
+    _log_line(f"saved checkpoint at step {step} ({len(samples)} samples)")
 
 
 def mock_train(job: dict) -> None:
@@ -81,6 +92,9 @@ def mock_train(job: dict) -> None:
         STATE["step"] = step
         STATE["sec_per_step"] = round(avg, 4)
         STATE["loss"] = round(0.35 * math.exp(-3 * step / total) + 0.02 + rng.uniform(-0.008, 0.008), 5)
+        STATE["loss_history"].append([step, STATE["loss"]])
+        if step % 10 == 0 or step == total:
+            _log_line(f"step {step}/{total}  loss {STATE['loss']:.4f}  {STATE['sec_per_step']:.3f}s/step")
         if step in schedule or STATE["manual_save"]:
             STATE["manual_save"] = False
             _save_checkpoint(step, job)
@@ -106,7 +120,12 @@ def build_toolkit_config(job: dict) -> Path:
     arch = ARCH_BY_FAMILY.get(base["family"])
     if not arch:
         raise RuntimeError(f"Family {base['family']} is not trainable")
-    save_every = 250
+    # ai-toolkit only supports a uniform interval; use the GCD of the
+    # requested schedule so every requested step IS a save point
+    # (e.g. [1000..5000] -> 1000; the default [250,500,750,1000,1500,2000] -> 250).
+    sched = [s for s in job.get("checkpoint_steps", []) if isinstance(s, int) and s > 0]
+    save_every = math.gcd(*sched) if sched else 250
+    save_every = max(50, min(save_every, job["steps"]))
     is_qwen = base["family"].startswith("qwen")
     profile = job.get("vram_profile", "low")  # low (24GB) | balanced (48GB) | high (80GB+)
     train = {
@@ -188,12 +207,14 @@ def real_train(job: dict) -> None:
     last_step = 0
     from collections import deque
     tail = deque(maxlen=40)
+    last_scan = 0.0
     log = open(job_dir() / "train.log", "w")
     for line in proc.stdout:
         log.write(line)
         log.flush()
         if line.strip():
             tail.append(line.rstrip())
+            STATE["log_tail"] = list(tail)[-_LOG_TAIL_MAX:]
         if STATE["cancel"]:
             proc.terminate()
             STATE["state"] = "cancelled"
@@ -212,8 +233,13 @@ def real_train(job: dict) -> None:
             lm = re.search(r"loss[:=]\s*([0-9.]+)", line)
             if lm:
                 STATE["loss"] = float(lm.group(1))
-            _scan_toolkit_outputs(job)
+                STATE["loss_history"].append([step, STATE["loss"]])
+            if time.monotonic() - last_scan > 2:
+                last_scan = time.monotonic()
+                _scan_samples(job)          # samples first so checkpoints can pair with them
+                _scan_toolkit_outputs(job)
     proc.wait()
+    _scan_samples(job)
     log.close()
     _scan_toolkit_outputs(job)
     STATE["state"] = "done" if proc.returncode == 0 else "error"
@@ -226,20 +252,40 @@ def real_train(job: dict) -> None:
         STATE["error"] = f"ai-toolkit exited {proc.returncode}: {excerpt or 'no output — open the log'}"
 
 
+def _scan_samples(job: dict) -> None:
+    """Pick up EVERY sample ai-toolkit writes (incl. the step-0 baseline),
+    not just ones matched to a checkpoint."""
+    samples_dir = job_dir() / "output" / job["id"] / "samples"
+    if not samples_dir.exists():
+        return
+    seen = {s["file"] for s in STATE["samples"]}
+    for f in sorted(samples_dir.iterdir()):
+        if f.suffix.lower() not in (".png", ".jpg", ".jpeg"):
+            continue
+        rel = str(f.relative_to(job_dir()))
+        if rel in seen:
+            continue
+        m = re.search(r"_(\d+)_(\d+)\.\w+$", f.name)  # trailing _<step>_<promptIdx>.ext
+        STATE["samples"].append({"step": int(m.group(1)) if m else None, "file": rel})
+        _log_line(f"sample rendered: {f.name}")
+
+
 def _scan_toolkit_outputs(job: dict) -> None:
     out = job_dir() / "output" / job["id"]
     if not out.exists():
         return
-    seen = {c["file"] for c in STATE["checkpoints"]}
+    seen = {Path(c["file"]).name for c in STATE["checkpoints"]}
     for f in sorted(out.glob("*.safetensors")):
         if f.name in seen:
             continue
-        m = re.search(r"(\d+)", f.stem)
+        # ai-toolkit names checkpoints <name>_<step>.safetensors. Anchor on the
+        # TRAILING number — the job id itself may contain digits.
+        m = re.search(r"_(\d+)$", f.stem)
         step = int(m.group(1)) if m else STATE["step"]
-        samples = [s.name for s in sorted((out / "samples").glob(f"*{step}*.png"))] \
-            if (out / "samples").exists() else []
+        samples = [s["file"] for s in STATE["samples"] if s.get("step") == step]
         STATE["checkpoints"].append({"step": step, "file": str(f.relative_to(job_dir())),
                                      "samples": samples})
+        _log_line(f"checkpoint detected: {f.name} (step {step})")
 
 
 # ---------------- HTTP ----------------
@@ -260,8 +306,13 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == "/health":
             self._json(200, {"ok": True})
         elif self.path == "/status":
-            self._json(200, {k: STATE[k] for k in
-                             ("state", "step", "total", "loss", "sec_per_step", "checkpoints", "error")})
+            history = STATE["loss_history"]
+            stride = max(1, len(history) // 400)
+            payload = {k: STATE[k] for k in
+                       ("state", "step", "total", "loss", "sec_per_step", "checkpoints", "error", "log_tail")}
+            payload["loss_history"] = history[::stride] + ([history[-1]] if history and stride > 1 else [])
+            payload["samples"] = STATE["samples"][-60:]
+            self._json(200, payload)
         else:
             self._json(404, {"error": "not found"})
 
@@ -274,6 +325,7 @@ class Handler(BaseHTTPRequestHandler):
                 job = CONFIG["training_job"]
                 STATE.update(state="running", step=0, total=job["steps"], loss=None,
                              sec_per_step=None, checkpoints=[], error=None,
+                             loss_history=[], samples=[], log_tail=[],
                              cancel=False, manual_save=False)
                 target = mock_train if CONFIG.get("mock") else real_train
                 STATE["thread"] = threading.Thread(target=self._run, args=(target, job), daemon=True)

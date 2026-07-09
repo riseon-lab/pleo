@@ -379,6 +379,10 @@ while time.time() < deadline:
         break
     time.sleep(0.5)
 check("training completes", j2["status"] == "done", str(j2["status"]) + str(j2.get("error")))
+check("loss history recorded", len(j2.get("loss_history", [])) > 10
+      and j2["loss_history"][0][1] > j2["loss_history"][-1][1], str(len(j2.get("loss_history", []))))
+check("samples listed independently of checkpoints", len(j2.get("samples", [])) == len(j2["checkpoints"]),
+      str(j2.get("samples")))
 steps_saved = [ck["step"] for ck in j2["checkpoints"]]
 check("checkpoints at schedule + final", steps_saved == [100, 200, 300], str(steps_saved))
 check("samples per checkpoint", all(len(ck["samples"]) == 1 for ck in j2["checkpoints"]), str(j2["checkpoints"]))

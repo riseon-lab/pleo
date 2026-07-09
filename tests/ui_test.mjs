@@ -208,6 +208,8 @@ await page.waitForFunction(() => {
   return i && i.naturalWidth > 0;
 }, { timeout: 15000 });
 check('checkpoint sample thumbnails render', true);
+check('loss curve rendered', await page.locator('.loss-chart path').count() >= 1);
+check('samples strip present', await page.locator('h3:text("Samples")').count() === 1);
 await page.click('.list-row button:text("Use as LoRA")');
 await page.waitForSelector('.toast-success', { timeout: 10000 });
 await page.screenshot({ path: SHOTS + '10-training.png' });
