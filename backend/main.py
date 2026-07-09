@@ -81,7 +81,12 @@ app.mount("/", StaticFiles(directory=str(config.ROOT / "frontend"), html=True), 
 
 
 def run() -> None:
-    uvicorn.run(app, host="0.0.0.0", port=config.PORT, log_level="info")
+    # Access logs (one line per request) drown the terminal; keep only
+    # warnings/errors and our own messages. PLEO_ACCESS_LOG=1 re-enables
+    # request logging for debugging.
+    import os
+    uvicorn.run(app, host="0.0.0.0", port=config.PORT, log_level="warning",
+                access_log=os.environ.get("PLEO_ACCESS_LOG") == "1")
 
 
 if __name__ == "__main__":
