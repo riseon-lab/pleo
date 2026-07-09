@@ -40,6 +40,15 @@ def list_loras():
     return {"loras": items}
 
 
+@router.get("/{filename}/file")
+def download_lora(filename: str):
+    from fastapi.responses import FileResponse
+    p = config.LORAS_DIR / safe_filename(filename)
+    if not path_inside(config.LORAS_DIR, p) or not p.exists():
+        raise HTTPException(404, "No such LoRA")
+    return FileResponse(p, media_type="application/octet-stream", filename=p.name)
+
+
 @router.delete("/{filename}")
 def delete_lora(filename: str):
     p = config.LORAS_DIR / safe_filename(filename)

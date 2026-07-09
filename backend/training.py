@@ -379,23 +379,43 @@ async def _poll_loop(job_id: str) -> None:
         events.publish({"type": "training", "job": _public(_job(job_id))})
 
 
-async def _push_to_hf(job: dict) -> None:
-    push = job["hf_push"]
+def _checkpoint_paths(job: dict) -> list[Path]:
+    """Resolve checkpoint entries (job-dir-relative in both modes) to files."""
+    out = []
+    d = job_dir(job["id"])
+    for c in job.get("checkpoints", []):
+        p = d / ("checkpoints" if "/" not in c["file"] else "") / c["file"]
+        if path_inside(d, p) and p.exists():
+            out.append(p)
+    return out
+
+
+async def _push_to_hf(job: dict, push: Optional[dict] = None, key: Optional[str] = None) -> None:
+    push = push or job["hf_push"]
     if config.MOCK:
         events.publish({"type": "training_push", "job_id": job["id"], "status": "skipped",
-                        "detail": "mock mode — no real upload"})
+                        "detail": f"mock mode — would upload to {push['repo_id']}"})
         return
-    key = _live["hf_key"]
+    key = key or _live["hf_key"]
     if not key:
         events.publish({"type": "training_push", "job_id": job["id"], "status": "error",
-                        "detail": "HF key no longer in memory (backend restarted?) — push manually"})
+                        "detail": "No HF key available — use Push to HF on the job card"})
         return
+    files = _checkpoint_paths(job)
+    if not files:
+        events.publish({"type": "training_push", "job_id": job["id"], "status": "error",
+                        "detail": "No checkpoint files on disk to upload"})
+        return
+
     def _do():
         from huggingface_hub import HfApi
         api = HfApi(token=key)
-        api.create_repo(push["repo_id"], private=push["private"], exist_ok=True, repo_type="model")
-        api.upload_folder(folder_path=str(job_dir(job["id"]) / "checkpoints"),
-                          repo_id=push["repo_id"], repo_type="model")
+        api.create_repo(push["repo_id"], private=push.get("private", True), exist_ok=True, repo_type="model")
+        for i, p in enumerate(files):
+            events.publish({"type": "training_push", "job_id": job["id"], "status": "uploading",
+                            "detail": f"{p.name} ({i + 1}/{len(files)})"})
+            api.upload_file(path_or_fileobj=str(p), path_in_repo=p.name,
+                            repo_id=push["repo_id"], repo_type="model")
     try:
         await asyncio.to_thread(_do)
         events.publish({"type": "training_push", "job_id": job["id"], "status": "done",
@@ -403,6 +423,28 @@ async def _push_to_hf(job: dict) -> None:
     except Exception as e:
         events.publish({"type": "training_push", "job_id": job["id"], "status": "error",
                         "detail": str(e)[:300]})
+
+
+class PushBody(BaseModel):
+    repo_id: str
+    private: bool = True
+    hf_key: Optional[str] = None  # transient, never persisted
+
+
+@router.post("/jobs/{job_id}/push")
+async def push_job(job_id: str, body: PushBody):
+    """Post-hoc push of a finished job's checkpoints to Hugging Face."""
+    import re as _re
+    job = _job(job_id)
+    if not _re.fullmatch(r"[\w.-]+/[\w.-]+", body.repo_id.strip()):
+        raise HTTPException(400, "repo_id must look like user/name")
+    if not job.get("checkpoints"):
+        raise HTTPException(400, "Job has no checkpoints to push")
+    if not config.MOCK and not body.hf_key:
+        raise HTTPException(400, "Hugging Face token required — save it in Settings first")
+    asyncio.get_running_loop().create_task(
+        _push_to_hf(job, {"repo_id": body.repo_id.strip(), "private": body.private}, body.hf_key))
+    return {"ok": True, "detail": "Upload started — progress via events"}
 
 
 @router.post("/jobs/{job_id}/checkpoint")

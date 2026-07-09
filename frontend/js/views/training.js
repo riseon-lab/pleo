@@ -63,9 +63,10 @@ export async function render(root) {
       drawJobs();
     }
     if (ev.type === 'training_push') {
-      if (ev.status === 'done') toast(`Pushed to HF: ${ev.repo}`, 'success');
-      if (ev.status === 'error') toast(`HF push failed: ${ev.detail}`, 'error');
-      if (ev.status === 'skipped') toast('HF push skipped (mock mode)');
+      if (ev.status === 'uploading') toast(`Uploading to HF: ${ev.detail}`, 'info', 2000);
+      if (ev.status === 'done') toast(`Pushed to HF: ${ev.repo}`, 'success', 6000);
+      if (ev.status === 'error') toast(`HF push failed: ${ev.detail}`, 'error', 6000);
+      if (ev.status === 'skipped') toast(ev.detail || 'HF push skipped (mock mode)');
     }
   });
   return off;
@@ -283,6 +284,11 @@ function jobCard(job, refresh) {
       },
     }, 'Delete'));
   }
+  if (job.status !== 'running' && (job.checkpoints || []).length) {
+    actions.push(h('button', {
+      class: 'btn small', onclick: () => pushToHFModal(job),
+    }, 'Push to HF'));
+  }
   actions.push(h('button', {
     class: 'btn small ghost', onclick: async () => {
       try {
@@ -307,6 +313,18 @@ function jobCard(job, refresh) {
     ckpts.append(h('div', { class: 'list-row' },
       h('span', { class: 'mono', style: 'width:90px' }, `step ${c.step}`),
       h('div', { class: 'grow' }, sampleRow),
+      h('button', {
+        class: 'btn small ghost', onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            const path = (c.file.includes('/') ? c.file : `checkpoints/${c.file}`)
+              .split('/').map(encodeURIComponent).join('/');
+            const resp = await apiBlob(`/api/training/jobs/${job.id}/files/${path}`);
+            saveBlob(await resp.blob(), c.file.split('/').pop());
+          } catch (err) { toast(err.message, 'error'); }
+          e.target.disabled = false;
+        },
+      }, 'Download'),
       h('button', {
         class: 'btn small ghost', onclick: async () => {
           try {
@@ -416,6 +434,44 @@ function sampleThumb(jobId, s) {
     }).catch(() => img.remove());
   }
   return img;
+}
+
+function saveBlob(blob, filename) {
+  const a = h('a', { href: URL.createObjectURL(blob), download: filename });
+  document.body.append(a);
+  a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+}
+
+function pushToHFModal(job) {
+  const repo = h('input', { type: 'text', value: job.hf_push?.repo_id || '', placeholder: 'user/my-lora' });
+  const priv = h('input', { type: 'checkbox', checked: job.hf_push?.private ?? true });
+  const go = h('button', {
+    class: 'btn', onclick: async () => {
+      if (!repo.value.trim()) return;
+      go.disabled = true;
+      try {
+        const keys = await getApiKeys();
+        if (!keys.hf_key) {
+          toast('Save a write-scoped Hugging Face token in Settings first', 'error', 6000);
+          go.disabled = false;
+          return;
+        }
+        await api(`/api/training/jobs/${job.id}/push`, {
+          method: 'POST',
+          body: { repo_id: repo.value.trim(), private: priv.checked, hf_key: keys.hf_key },
+        });
+        toast('Upload started — watch the toasts for progress');
+        m.close();
+      } catch (e) { toast(e.message, 'error'); go.disabled = false; }
+    },
+  }, 'Push checkpoints');
+  const m = modal(`Push “${job.name}” to Hugging Face`, h('div', {},
+    h('p', { class: 'muted' },
+      `Uploads all ${job.checkpoints.length} checkpoint file(s). Uses the HF token from Settings (needs write scope); the token is sent transiently and never stored server-side.`),
+    h('label', { class: 'field' }, h('span', {}, 'Repo'), repo),
+    h('label', { class: 'row gap', style: 'margin-bottom:14px' }, priv, h('span', {}, 'Private repo')),
+    go));
 }
 
 function fmtDuration(s) {

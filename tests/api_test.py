@@ -395,6 +395,12 @@ r = c.post(f"/api/training/jobs/{tj2}/to-loras", headers=H, json={"checkpoint_fi
 check("checkpoint promoted to LoRA library", r.status_code == 200, r.text)
 lora_name = r.json()["file"]
 check("promoted LoRA listed", any(l["file"] == lora_name for l in c.get("/api/loras", headers=H).json()["loras"]))
+r = c.get(f"/api/loras/{lora_name}/file", headers=H)
+check("LoRA file downloadable", r.status_code == 200 and len(r.content) > 100, str(r.status_code))
+r = c.post(f"/api/training/jobs/{tj2}/push", headers=H, json={"repo_id": "user/test-lora", "private": True})
+check("post-hoc HF push accepted (mock skips upload)", r.status_code == 200, r.text)
+r = c.post(f"/api/training/jobs/{tj2}/push", headers=H, json={"repo_id": "not a repo id"})
+check("bad push repo id rejected", r.status_code == 400, r.text)
 r = c.delete(f"/api/training/jobs/{tj1}", headers=H)
 check("cancelled job deletable", r.status_code == 200, r.text)
 c.delete(f"/api/loras/{lora_name}", headers=H)

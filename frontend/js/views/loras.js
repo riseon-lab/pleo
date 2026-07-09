@@ -1,5 +1,5 @@
 // LoRAs view: Hugging Face + Civitai download tabs, local list, progress.
-import { api, onEvent } from '../api.js';
+import { api, apiBlob, onEvent } from '../api.js';
 import { h, clear, toast, modal, confirmModal, fmtBytes } from '../ui.js';
 import { getApiKeys } from './settings.js';
 
@@ -34,6 +34,20 @@ export async function render(root) {
         h('div', { class: 'grow' },
           h('div', {}, l.label || l.file),
           h('div', { class: 'muted mono' }, `${l.file} · ${fmtBytes(l.size)}${l.source ? ` · ${l.source.kind}` : ''}`)),
+        h('button', {
+          class: 'btn small ghost', onclick: async (e) => {
+            e.target.disabled = true;
+            try {
+              const resp = await apiBlob(`/api/loras/${encodeURIComponent(l.file)}/file`);
+              const blob = await resp.blob();
+              const a = h('a', { href: URL.createObjectURL(blob), download: l.file });
+              document.body.append(a);
+              a.click();
+              setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 5000);
+            } catch (err) { toast(err.message, 'error'); }
+            e.target.disabled = false;
+          },
+        }, 'Download'),
         h('button', {
           class: 'btn small danger', onclick: async () => {
             if (!await confirmModal('Delete LoRA', `Remove ${l.file} from disk?`)) return;
