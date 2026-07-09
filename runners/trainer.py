@@ -92,9 +92,10 @@ def mock_train(job: dict) -> None:
 
 AI_TOOLKIT_DIR = os.environ.get("AI_TOOLKIT_DIR", "/workspace/ai-toolkit")
 
-# ai-toolkit model arch names per Pleo model family — verify against the
-# installed ai-toolkit version on the pod.
-ARCH_BY_FAMILY = {"zimage": "z_image", "qwen-image": "qwen_image"}
+# ai-toolkit arch names, verified against source: ZImageModel.arch = "zimage"
+# (extensions_built_in/diffusion_models/z_image/z_image.py) and the official
+# qwen example config uses arch "qwen_image".
+ARCH_BY_FAMILY = {"zimage": "zimage", "qwen-image": "qwen_image"}
 
 
 def build_toolkit_config(job: dict) -> Path:
