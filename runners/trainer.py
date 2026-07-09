@@ -19,6 +19,7 @@ import os
 import random
 import re
 import subprocess
+import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,17 +178,22 @@ def real_train(job: dict) -> None:
         return
     cfg_path = build_toolkit_config(job)
     env = dict(os.environ, HF_HOME=CONFIG["hf_home"])
+    # Use the trainer venv's own interpreter, not whatever "python" resolves to.
     proc = subprocess.Popen(
-        ["python", "run.py", str(cfg_path)], cwd=AI_TOOLKIT_DIR, env=env,
+        [sys.executable, "run.py", str(cfg_path)], cwd=AI_TOOLKIT_DIR, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     STATE["proc"] = proc
     t_prev, avg = time.monotonic(), None
     last_step = 0
+    from collections import deque
+    tail = deque(maxlen=40)
     log = open(job_dir() / "train.log", "w")
     for line in proc.stdout:
         log.write(line)
         log.flush()
+        if line.strip():
+            tail.append(line.rstrip())
         if STATE["cancel"]:
             proc.terminate()
             STATE["state"] = "cancelled"
@@ -212,7 +218,12 @@ def real_train(job: dict) -> None:
     _scan_toolkit_outputs(job)
     STATE["state"] = "done" if proc.returncode == 0 else "error"
     if proc.returncode != 0:
-        STATE["error"] = f"ai-toolkit exited {proc.returncode} — see train.log"
+        # Surface the actual failure, not just the exit code: last error-ish
+        # lines first, else the raw tail.
+        lines = list(tail)
+        errorish = [l for l in lines if re.search(r"error|exception|traceback|failed|not found|no such|oom|out of memory", l, re.I)]
+        excerpt = " | ".join((errorish or lines)[-6:])[:800]
+        STATE["error"] = f"ai-toolkit exited {proc.returncode}: {excerpt or 'no output — open the log'}"
 
 
 def _scan_toolkit_outputs(job: dict) -> None:

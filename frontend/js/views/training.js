@@ -1,7 +1,7 @@
 // Training: LoRA jobs — config, live progress, checkpoints with samples,
 // ETA + cost from your RunPod hourly rate, push to HF, promote to LoRAs.
 import { api, apiBlob, onEvent } from '../api.js';
-import { h, clear, toast, confirmModal, fmtBytes, lightbox } from '../ui.js';
+import { h, clear, toast, confirmModal, fmtBytes, lightbox, modal } from '../ui.js';
 import { getApiKeys } from './settings.js';
 
 const RATE_KEY = 'pleo-runpod-rate';
@@ -280,6 +280,20 @@ function jobCard(job, refresh) {
       },
     }, 'Delete'));
   }
+  actions.push(h('button', {
+    class: 'btn small ghost', onclick: async () => {
+      try {
+        const resp = await apiBlob(`/api/training/jobs/${job.id}/files/train.log`);
+        const text = await resp.text();
+        const pre = h('pre', { class: 'output', style: 'max-height:60vh' },
+          text.slice(-20000) || '(log is empty)');
+        modal(`train.log — ${job.name}`, pre, { wide: true });
+        pre.scrollTop = pre.scrollHeight;
+      } catch (e) {
+        toast(e.status === 404 ? 'No log yet for this job (mock runs don’t write one)' : e.message, 'error');
+      }
+    },
+  }, 'View log'));
 
   const ckpts = h('div', { class: 'list' });
   for (const c of [...(job.checkpoints || [])].reverse()) {
