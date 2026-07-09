@@ -49,6 +49,11 @@ export async function render(root) {
       if (ev.status === 'error') toast(`Trainer env failed: ${ev.detail}`, 'error');
       envCard.refresh();
     }
+    if (ev.type === 'toolkit' && envCard) {
+      envCard.applyToolkit(ev);
+      if (ev.status === 'ready') toast('ai-toolkit ready — you can start training', 'success');
+      if (ev.status === 'error') toast(`ai-toolkit install failed: ${ev.detail}`, 'error');
+    }
     if (ev.type === 'training') {
       const i = jobList.findIndex(j => j.id === ev.job.id);
       if (i >= 0) jobList[i] = ev.job; else jobList.unshift(ev.job);
@@ -70,15 +75,41 @@ function trainerEnvCard() {
   const detail = h('span', { class: 'muted' }, '');
   const createBtn = h('button', { class: 'btn small ghost' }, 'Create env');
   const deleteBtn = h('button', { class: 'btn small danger', hidden: true }, 'Delete env');
+  const tkStatus = h('span', { class: 'badge' }, '…');
+  const tkBtn = h('button', { class: 'btn small ghost' }, 'Install ai-toolkit');
+  const tkDetail = h('div', { class: 'muted', style: 'margin-top:6px;font-size:12.5px;word-break:break-word' }, '');
   const card = h('div', { class: 'card', style: 'margin-bottom:16px' },
-    h('h3', {}, 'Trainer environment'),
+    h('h3', {}, 'Trainer setup'),
     h('p', { class: 'muted' },
-      'Isolated venv for ai-toolkit. Also clone it on the volume once: git clone https://github.com/ostris/ai-toolkit /workspace/ai-toolkit'),
-    h('div', { class: 'row gap', style: 'flex-wrap:wrap' }, status, createBtn, deleteBtn, detail));
+      '1. Create the isolated venv. 2. Install ai-toolkit (clones the repo and installs its requirements — a few minutes). Then start training.'),
+    h('div', { class: 'row gap', style: 'flex-wrap:wrap' }, status, createBtn, deleteBtn, detail),
+    h('div', { class: 'row gap', style: 'flex-wrap:wrap;margin-top:10px' }, tkStatus, tkBtn),
+    tkDetail);
+
+  let envReady = false;
+
+  card.applyToolkit = (t) => {
+    const busy = t.status === 'cloning' || t.status === 'installing';
+    tkStatus.textContent = t.present || t.status === 'ready' ? 'ai-toolkit ready'
+      : busy ? `ai-toolkit ${t.status}…` : t.status === 'error' ? 'ai-toolkit error' : 'ai-toolkit missing';
+    tkStatus.className = `badge ${t.status === 'ready' || t.present ? 'ok' : busy ? 'busy' : t.status === 'error' ? 'err' : 'warn'}`;
+    tkBtn.textContent = busy ? 'Installing…'
+      : t.status === 'error' ? 'Retry install'
+      : t.present ? 'Update ai-toolkit' : 'Install ai-toolkit';
+    tkBtn.disabled = busy || (!envReady && !t.present);
+    tkDetail.textContent = t.detail || (!envReady && !t.present ? 'Create the trainer env first.' : '');
+  };
+  tkBtn.onclick = async () => {
+    tkBtn.disabled = true;
+    try { await api('/api/training/toolkit/install', { method: 'POST' }); toast('ai-toolkit install started'); }
+    catch (e) { toast(e.message, 'error'); tkBtn.disabled = false; }
+  };
 
   card.refresh = async () => {
-    const envs = await api('/api/envs');
+    const [envs, toolkit] = await Promise.all([api('/api/envs'), api('/api/training/toolkit')]);
     const s = envs.trainer || { status: 'none', detail: '' };
+    envReady = s.status === 'ready';
+    card.applyToolkit(toolkit);
     status.textContent = `env ${s.status}`;
     status.className = `badge ${s.status === 'ready' ? 'ok' : s.status === 'none' ? '' : s.status === 'error' ? 'err' : 'busy'}`;
     detail.textContent = ['creating', 'installing'].includes(s.status) ? (s.detail || '') : (s.status === 'error' ? s.detail : '');

@@ -314,6 +314,13 @@ r = c.delete(f"/api/datasets/{ds_id}/images/img2.png", headers=H)
 check("dataset image delete", r.status_code == 200)
 
 # --- training ---
+r = c.get("/api/training/toolkit", headers=H)
+check("toolkit status endpoint", r.status_code == 200 and "present" in r.json() and "dir" in r.json(), r.text)
+r = c.post("/api/training/toolkit/install", headers=H)
+check("toolkit install (mock short-circuit)", r.status_code == 200, r.text)
+r = c.get("/api/training/toolkit", headers=H)
+check("toolkit ready after mock install", r.json()["status"] == "ready", r.text)
+
 base_job = {"name": "cancel me", "dataset_id": ds_id, "base_model": "z-image-base",
             "trigger_word": "zxq99", "steps": 3000, "checkpoint_steps": [250],
             "sample_prompts": ["zxq99 portrait"], "rank": 16, "lr": 0.0001,

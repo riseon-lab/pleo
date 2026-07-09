@@ -5,6 +5,8 @@ import asyncio
 import os
 import re
 import shutil
+import subprocess
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -39,6 +41,100 @@ VRAM_PROFILES = ["low", "balanced", "high"]
 
 _live: dict = {"job_id": None, "proc": None, "poll_task": None, "hf_key": None}
 _lock = asyncio.Lock()
+
+# ---------------- ai-toolkit install (button-driven; no pod terminal needed) ----------------
+
+AI_TOOLKIT_DIR = Path(os.environ.get("AI_TOOLKIT_DIR", "/workspace/ai-toolkit"))
+AI_TOOLKIT_REPO = "https://github.com/ostris/ai-toolkit"
+_toolkit = {"status": "idle", "detail": ""}  # idle|cloning|installing|ready|error
+_toolkit_lock = threading.Lock()
+
+
+def _toolkit_present() -> bool:
+    return (AI_TOOLKIT_DIR / "run.py").exists()
+
+
+@router.get("/toolkit")
+def toolkit_status():
+    st = dict(_toolkit)
+    st["present"] = _toolkit_present()
+    st["dir"] = str(AI_TOOLKIT_DIR)
+    if st["status"] == "idle" and st["present"]:
+        st["status"] = "ready"
+    return st
+
+
+@router.post("/toolkit/install")
+def toolkit_install():
+    with _toolkit_lock:
+        if _toolkit["status"] in ("cloning", "installing"):
+            raise HTTPException(409, "ai-toolkit install already in progress")
+        if config.MOCK:
+            _toolkit.update(status="ready", detail="mock mode — simulated install")
+            events.publish({"type": "toolkit", **_toolkit, "present": True})
+            return {"ok": True, "mock": True}
+        from .envmgr import env_status
+        if env_status("trainer")["status"] != "ready":
+            raise HTTPException(409, "Create the trainer environment first")
+        _toolkit.update(status="cloning", detail="starting…")
+    threading.Thread(target=_toolkit_worker, daemon=True).start()
+    return {"ok": True}
+
+
+def _toolkit_worker() -> None:
+    from .envmgr import python_path
+
+    def pub():
+        events.publish({"type": "toolkit", **_toolkit, "present": _toolkit_present()})
+
+    try:
+        if not _toolkit_present():
+            _toolkit.update(status="cloning", detail=f"git clone → {AI_TOOLKIT_DIR}")
+            pub()
+            AI_TOOLKIT_DIR.parent.mkdir(parents=True, exist_ok=True)
+            if AI_TOOLKIT_DIR.exists():
+                shutil.rmtree(AI_TOOLKIT_DIR)  # debris from an interrupted clone
+            r = subprocess.run(["git", "clone", "--depth", "1", AI_TOOLKIT_REPO, str(AI_TOOLKIT_DIR)],
+                               capture_output=True, text=True, timeout=900)
+            if r.returncode != 0:
+                raise RuntimeError(f"git clone failed: {r.stderr[-300:]}")
+        else:
+            _toolkit.update(status="cloning", detail="updating existing clone (git pull)")
+            pub()
+            subprocess.run(["git", "-C", str(AI_TOOLKIT_DIR), "pull", "--ff-only"],
+                           capture_output=True, text=True, timeout=300)
+
+        py = str(python_path("trainer"))
+        _toolkit.update(status="installing", detail="pip install -r requirements.txt (this takes a few minutes)")
+        pub()
+        proc = subprocess.Popen([py, "-m", "pip", "install", "-r",
+                                 str(AI_TOOLKIT_DIR / "requirements.txt")],
+                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        assert proc.stdout is not None
+        for line in proc.stdout:
+            line = line.strip()
+            if line:
+                _toolkit["detail"] = line[-200:]
+                pub()
+        if proc.wait() != 0:
+            raise RuntimeError(f"pip install failed: {_toolkit['detail']}")
+
+        # Sanity: torch must import inside the trainer venv and see the GPU
+        # (ai-toolkit's requirements may have replaced the shared torch).
+        chk = subprocess.run([py, "-c", "import torch; print(torch.__version__, torch.cuda.is_available())"],
+                             capture_output=True, text=True, timeout=180)
+        if chk.returncode == 0:
+            version, cuda_ok = (chk.stdout.strip().rsplit(" ", 1) + ["False"])[:2]
+            detail = f"ready — venv torch {version}, CUDA {'OK' if cuda_ok == 'True' else 'NOT AVAILABLE'}"
+            if cuda_ok != "True":
+                raise RuntimeError(detail + " — the pip install may have replaced torch with an incompatible build")
+        else:
+            raise RuntimeError(f"torch check failed in trainer venv: {chk.stderr[-250:]}")
+        _toolkit.update(status="ready", detail=detail)
+        pub()
+    except Exception as e:
+        _toolkit.update(status="error", detail=str(e)[:350])
+        pub()
 
 
 def _jobs() -> list[dict]:
@@ -170,6 +266,8 @@ async def _start_job(job: dict, hf_key: Optional[str]) -> None:
             python = proc.pick_python("trainer")
         except RuntimeError as e:
             raise HTTPException(409, str(e))
+        if not config.MOCK and not _toolkit_present():
+            raise HTTPException(409, "ai-toolkit is not installed — use Install ai-toolkit on the Training page")
         # Free the GPU: generation and captioning runners are stopped.
         await runner_manager.stop_runner()
         await captioner_manager.shutdown()
