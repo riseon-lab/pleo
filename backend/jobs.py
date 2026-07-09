@@ -44,7 +44,8 @@ class GenerateBody(BaseModel):
 
 def _public_job(job: dict) -> dict:
     return {k: job[k] for k in
-            ("id", "model_id", "status", "created", "prompt", "steps", "width", "height", "seed", "error", "result_id")
+            ("id", "model_id", "status", "created", "prompt", "steps", "width", "height", "seed",
+             "error", "result_id", "asset_id")
             if k in job}
 
 
@@ -55,8 +56,13 @@ def _publish_job(job: dict) -> None:
 @router.post("/generate", dependencies=[AUTHED])
 async def submit(body: GenerateBody):
     model = get_model(body.model_id)
-    if body.width % 8 or body.height % 8:
-        raise HTTPException(400, "Dimensions must be multiples of 8")
+    # Latent/patch constraints vary per model (Z-Image/Qwen need multiples of
+    # 16). Auto-round instead of rejecting — e.g. FHD 1080 becomes 1072.
+    mult = int(model.get("dim_multiple", 16))
+    def _snap(v: int) -> int:  # nearest multiple, ties toward the smaller (1080 -> 1072)
+        return max(64, min(2048, (2 * v + mult - 1) // (2 * mult) * mult))
+    width = _snap(body.width)
+    height = _snap(body.height)
     if model["kind"] == "edit" and not body.ref_image_b64:
         raise HTTPException(400, "This model requires a reference image")
     lora_files = []
@@ -86,8 +92,8 @@ async def submit(body: GenerateBody):
         "negative_prompt": body.negative_prompt,
         "steps": body.steps,
         "cfg": body.cfg,
-        "width": body.width,
-        "height": body.height,
+        "width": width,
+        "height": height,
         "seed": body.seed,
         "loras": lora_files,
         "ref_bytes": ref_bytes,
@@ -181,6 +187,39 @@ def _finish(job: dict) -> None:
     _history.insert(0, job)
     del _history[50:]
     _publish_job(job)
+
+
+class AttachAssetBody(BaseModel):
+    asset_id: str
+
+
+@router.post("/jobs/{job_id}/asset", dependencies=[AUTHED])
+def attach_asset(job_id: str, body: AttachAssetBody):
+    """Client calls this after encrypting+saving a result, linking the job's
+    history entry to the stored asset so the queue can show it."""
+    for j in _history:
+        if j["id"] == job_id:
+            j["asset_id"] = body.asset_id
+            _publish_job(j)
+            return {"ok": True}
+    raise HTTPException(404, "Job not in history")
+
+
+@router.delete("/jobs/{job_id}/history", dependencies=[AUTHED])
+def delete_history_entry(job_id: str):
+    before = len(_history)
+    _history[:] = [j for j in _history if j["id"] != job_id]
+    if len(_history) == before:
+        raise HTTPException(404, "Job not in history")
+    return {"ok": True}
+
+
+@router.post("/queue/clear", dependencies=[AUTHED])
+def clear_history():
+    """Clears finished/errored history records. Saved assets are untouched."""
+    removed = len(_history)
+    _history.clear()
+    return {"ok": True, "removed": removed}
 
 
 @router.get("/queue", dependencies=[AUTHED])

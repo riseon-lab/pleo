@@ -2,15 +2,17 @@
 import { api, apiBlob, onEvent } from '../api.js';
 import { encryptBytes, encryptJSON } from '../crypto.js';
 import { getParams, saveParams, getLoraStack, saveLoraStack, getUI, saveUI } from '../state.js';
-import { h, clear, toast, modal, lightbox, fmtBytes } from '../ui.js';
+import { h, clear, toast, modal, lightbox, confirmModal, fmtBytes } from '../ui.js';
+import { decryptedAssetURL } from './assets.js';
 
+// FHD presets are snapped to the models' 16px latent grid (1080 → 1072).
 const PRESETS = [
   { label: 'Square 512 × 512', w: 512, h: 512 },
   { label: 'Square 1024 × 1024', w: 1024, h: 1024 },
   { label: 'Portrait 832 × 1216', w: 832, h: 1216 },
   { label: 'Landscape 1216 × 832', w: 1216, h: 832 },
-  { label: 'Portrait FHD 1080 × 1920', w: 1080, h: 1920 },
-  { label: 'Landscape FHD 1920 × 1080', w: 1920, h: 1080 },
+  { label: 'Portrait FHD 1072 × 1920', w: 1072, h: 1920 },
+  { label: 'Landscape FHD 1920 × 1072', w: 1920, h: 1072 },
 ];
 
 export async function render(root) {
@@ -24,9 +26,10 @@ export async function render(root) {
   if (!models.some(m => m.id === modelId)) modelId = models[0].id;
   let model = models.find(m => m.id === modelId);
   let params = getParams(modelId, defaultsOf(model));
-  let loraStack = getLoraStack(modelId);
+  let loraStack = normalizeStack(getLoraStack(modelId));
   let refFile = null; // {b64, name} for edit models
   let liveJobId = null;
+  const collectedResults = new Set();
 
   // ---------- controls ----------
   const modelSel = h('select', {
@@ -35,7 +38,7 @@ export async function render(root) {
       modelId = modelSel.value;
       model = models.find(m => m.id === modelId);
       params = getParams(modelId, defaultsOf(model));
-      loraStack = getLoraStack(modelId);
+      loraStack = normalizeStack(getLoraStack(modelId));
       saveUI({ selectedModel: modelId });
       syncInputs();
     },
@@ -102,7 +105,17 @@ export async function render(root) {
     progressWrap, statusLine);
 
   const queueList = h('div', { class: 'queue-list' });
-  const queueCard = h('div', { class: 'card section-gap' }, h('h3', {}, 'Queue'), queueList);
+  const clearBtn = h('button', {
+    class: 'btn small ghost', onclick: async () => {
+      try {
+        await api('/api/queue/clear', { method: 'POST' });
+        toast('Queue history cleared (assets stay in the library)', 'success');
+        refreshQueue();
+      } catch (e) { toast(e.message, 'error'); }
+    },
+  }, 'Clear history');
+  const queueCard = h('div', { class: 'card section-gap' },
+    h('div', { class: 'row between' }, h('h3', {}, 'Queue'), clearBtn), queueList);
 
   const badgeHost = h('span', {}, runnerBadge(modelsRes.runner, models));
   root.append(h('div', { class: 'view-head' }, h('h1', {}, 'Running'), badgeHost),
@@ -147,34 +160,69 @@ export async function render(root) {
 
   function renderLoraSummary() {
     clear(loraSummary);
-    if (!loraStack.length) loraSummary.append(h('span', { class: 'muted' }, 'None active'));
-    for (const l of loraStack) loraSummary.append(h('span', { class: 'lora-chip' }, `${l.file} · ${l.strength.toFixed(2)}`));
+    if (!loraStack.length) loraSummary.append(h('span', { class: 'muted' }, 'None imported'));
+    for (const l of loraStack) {
+      loraSummary.append(h('span', { class: `lora-chip${l.enabled ? '' : ' off'}` },
+        `${l.enabled ? '' : '⏸ '}${l.file} · ${l.strength.toFixed(2)}`));
+    }
   }
 
   async function openLoraModal() {
     const { loras } = await api('/api/loras');
     const body = h('div', {});
-    if (!loras.length) body.append(h('p', { class: 'muted' }, 'No local LoRAs yet — download some from the LoRAs page.'));
-    for (const lora of loras) {
-      const active = loraStack.find(l => l.file === lora.file);
-      const check = h('input', { type: 'checkbox', checked: !!active });
-      const slider = h('input', { type: 'range', min: -2, max: 2, step: 0.05, value: active ? active.strength : 1, disabled: !active });
-      const valLabel = h('span', { class: 'mono', style: 'width:48px;text-align:right' }, (+slider.value).toFixed(2));
-      slider.oninput = () => { valLabel.textContent = (+slider.value).toFixed(2); update(); };
-      check.onchange = () => { slider.disabled = !check.checked; update(); };
-      function update() {
-        loraStack = loraStack.filter(l => l.file !== lora.file);
-        if (check.checked) loraStack.push({ file: lora.file, strength: +slider.value });
-        saveLoraStack(modelId, loraStack);
-        renderLoraSummary();
-      }
-      body.append(h('div', { class: 'list-row' },
-        check,
-        h('div', { class: 'grow' },
-          h('div', {}, lora.label || lora.file),
-          h('div', { class: 'muted mono' }, `${lora.file} · ${fmtBytes(lora.size)}`)),
-        h('div', { style: 'width:180px' }, slider), valLabel));
+    const stackList = h('div', { class: 'list' });
+    const libList = h('div', { class: 'list' });
+
+    function persistStack() {
+      saveLoraStack(modelId, loraStack);
+      renderLoraSummary();
     }
+
+    function drawModal() {
+      clear(stackList);
+      if (!loraStack.length) stackList.append(h('p', { class: 'muted' }, 'Nothing imported — add from the library below.'));
+      for (const l of loraStack) {
+        const check = h('input', { type: 'checkbox', checked: l.enabled, title: 'Active in generations' });
+        const slider = h('input', { type: 'range', min: -2, max: 2, step: 0.05, value: l.strength });
+        const valLabel = h('span', { class: 'mono', style: 'width:48px;text-align:right' }, l.strength.toFixed(2));
+        check.onchange = () => { l.enabled = check.checked; persistStack(); };
+        slider.oninput = () => { l.strength = +slider.value; valLabel.textContent = l.strength.toFixed(2); persistStack(); };
+        stackList.append(h('div', { class: 'list-row' },
+          check,
+          h('div', { class: 'grow' }, h('div', {}, l.file)),
+          h('div', { style: 'width:170px' }, slider), valLabel,
+          h('button', {
+            class: 'icon-btn', 'aria-label': `Remove ${l.file} from stack`, onclick: () => {
+              loraStack = loraStack.filter(x => x !== l);
+              persistStack();
+              drawModal();
+            },
+          }, '✕')));
+      }
+      clear(libList);
+      const available = loras.filter(lora => !loraStack.some(l => l.file === lora.file));
+      if (!available.length) libList.append(h('p', { class: 'muted' },
+        loras.length ? 'Everything from the library is already imported.' : 'No local LoRAs yet — download some from the LoRAs page.'));
+      for (const lora of available) {
+        libList.append(h('div', { class: 'list-row' },
+          h('div', { class: 'grow' },
+            h('div', {}, lora.label || lora.file),
+            h('div', { class: 'muted mono' }, `${lora.file} · ${fmtBytes(lora.size)}`)),
+          h('button', {
+            class: 'btn small ghost', onclick: () => {
+              loraStack.push({ file: lora.file, strength: 1.0, enabled: true });
+              persistStack();
+              drawModal();
+            },
+          }, 'Add')));
+      }
+    }
+
+    body.append(h('h3', {}, 'Stack'),
+      h('p', { class: 'muted' }, 'Checkbox toggles a LoRA without losing its strength; ✕ removes it.'),
+      stackList,
+      h('h3', { class: 'section-gap' }, 'Library'), libList);
+    drawModal();
     modal('LoRA stack', body, { wide: true });
   }
 
@@ -182,6 +230,15 @@ export async function render(root) {
     persist();
     if (!prompt.value.trim()) { toast('Enter a prompt first', 'error'); return; }
     if (model.kind === 'edit' && !refFile) { toast('This model needs a reference image', 'error'); return; }
+    // Snap dimensions to the model's latent grid (e.g. 1080 -> 1072 for 16px).
+    const mult = model.dim_multiple || 16;
+    const snap = v => Math.max(64, Math.min(2048, Math.floor((2 * v + mult - 1) / (2 * mult)) * mult));
+    const [w, hgt] = [snap(+width.value), snap(+height.value)];
+    if (w !== +width.value || hgt !== +height.value) {
+      width.value = w; height.value = hgt;
+      persist(); syncAspect();
+      toast(`Resolution adjusted to ${w}×${hgt} (${model.name} needs multiples of ${mult})`);
+    }
     genBtn.disabled = true;
     try {
       const body = {
@@ -189,9 +246,9 @@ export async function render(root) {
         prompt: prompt.value,
         negative_prompt: negative.value,
         steps: +steps.value, cfg: +cfg.value,
-        width: +width.value, height: +height.value,
+        width: w, height: hgt,
         seed: +seed.value,
-        loras: loraStack,
+        loras: loraStack.filter(l => l.enabled).map(l => ({ file: l.file, strength: l.strength })),
       };
       if (model.kind === 'edit' && refFile) body.ref_image_b64 = refFile.b64;
       const res = await api('/api/generate', { method: 'POST', body });
@@ -230,21 +287,47 @@ export async function render(root) {
     const rows = [];
     if (q.current) rows.push([q.current, 'now']);
     for (const j of q.queued) rows.push([j, 'queued']);
-    for (const j of q.history.slice(0, 8)) rows.push([j, 'past']);
+    for (const j of q.history.slice(0, 12)) rows.push([j, 'past']);
     if (!rows.length) queueList.append(h('p', { class: 'muted' }, 'Nothing queued.'));
     for (const [j, kind] of rows) {
       const badgeClass = { done: 'ok', error: 'err', blocked: 'err', cancelled: 'warn', running: 'busy', starting: 'busy', queued: '' }[j.status] || '';
+      let thumb = null;
+      if (j.asset_id) {
+        const img = h('img', { class: 'queue-thumb', alt: 'result' });
+        decryptedAssetURL(j.asset_id).then(url => {
+          img.src = url;
+          img.onclick = () => lightbox(url, { metaEl: h('span', {}, j.prompt) });
+        }).catch(() => img.remove());
+        thumb = img;
+      }
+      const remove = kind === 'past'
+        ? h('button', {
+          class: 'icon-btn', 'aria-label': 'Remove from history', onclick: async () => {
+            if (j.asset_id) {
+              if (!await confirmModal('Remove generation',
+                'This removes the entry AND deletes the saved asset from the library.')) return;
+              await api(`/api/assets/${j.asset_id}`, { method: 'DELETE' }).catch(() => { });
+            }
+            api(`/api/jobs/${j.id}/history`, { method: 'DELETE' }).then(refreshQueue).catch(e => toast(e.message, 'error'));
+          },
+        }, '✕')
+        : h('button', { class: 'icon-btn', 'aria-label': 'Cancel', onclick: () => api(`/api/jobs/${j.id}/cancel`, { method: 'POST' }).then(refreshQueue).catch(e => toast(e.message, 'error')) }, '✕');
       queueList.append(h('div', { class: 'queue-item' },
+        thumb,
         h('span', { class: `badge ${badgeClass}` }, j.status),
-        h('span', { class: 'qprompt', title: j.prompt }, `${modelName(j.model_id)} — ${j.prompt}`),
+        h('span', { class: 'qprompt', title: j.error || j.prompt }, `${modelName(j.model_id)} — ${j.prompt}`),
         j.error ? h('span', { class: 'muted', title: j.error }, '⚠') : null,
-        kind !== 'past' ? h('button', { class: 'icon-btn', 'aria-label': 'Cancel', onclick: () => api(`/api/jobs/${j.id}/cancel`, { method: 'POST' }).then(refreshQueue).catch(e => toast(e.message, 'error')) }, '✕') : null));
+        remove));
     }
   }
 
   function modelName(id) { return (models.find(m => m.id === id) || { name: id }).name; }
 
   async function collectResult(job) {
+    // The attach-asset call republishes the job's "done" event; don't try to
+    // collect the same (already-consumed) outbox result twice.
+    if (collectedResults.has(job.result_id)) return;
+    collectedResults.add(job.result_id);
     try {
       const resp = await apiBlob(`/api/results/${job.result_id}`);
       const metaB64 = resp.headers.get('x-pleo-meta-plain');
@@ -257,9 +340,11 @@ export async function render(root) {
       // Encrypt in the browser, upload ciphertext, then discard the server copy.
       const encMeta = await encryptJSON({ ...meta, saved: Date.now() });
       const encBlob = await encryptBytes(bytes.slice(0));
-      await api('/api/assets', { method: 'POST', body: encBlob, headers: { 'X-Pleo-Kind': 'generated', 'X-Pleo-Meta': encMeta } });
+      const entry = await api('/api/assets', { method: 'POST', body: encBlob, headers: { 'X-Pleo-Kind': 'generated', 'X-Pleo-Meta': encMeta } });
       await api(`/api/results/${job.result_id}`, { method: 'DELETE' });
+      await api(`/api/jobs/${job.id}/asset`, { method: 'POST', body: { asset_id: entry.id } }).catch(() => { });
       toast('Saved to assets (encrypted)', 'success');
+      refreshQueue();
     } catch (e) {
       toast(`Result save failed: ${e.message}`, 'error');
     }
@@ -304,6 +389,10 @@ function runnerBadge(runner, models) {
   const name = model ? model.name : (runner.model_id || 'runner');
   const cls = runner.status === 'busy' ? 'busy' : runner.status === 'ready' ? 'ok' : 'warn';
   return h('span', { class: `badge ${cls}` }, `${name} · ${runner.status}`);
+}
+
+function normalizeStack(stack) {
+  return (stack || []).map(l => ({ enabled: true, ...l }));
 }
 
 function bufToB64(buf) {

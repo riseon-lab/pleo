@@ -181,6 +181,11 @@ input[type=range] { width: 100%; accent-color: var(--ink); }
 .queue-item .qprompt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-soft); }
 .lora-chiprow { display: flex; flex-wrap: wrap; gap: 6px; }
 .lora-chip { font-size: 12px; border: 1px solid var(--line); background: #F4F4F7; border-radius: 99px; padding: 2px 9px; }
+.lora-chip.off { opacity: .45; text-decoration: line-through; }
+.queue-thumb {
+  width: 44px; height: 44px; object-fit: cover; border-radius: 7px;
+  border: 1px solid var(--line); cursor: zoom-in; flex: 0 0 auto;
+}
 
 /* ---------- models view ---------- */
 .model-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }

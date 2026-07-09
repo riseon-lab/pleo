@@ -7,9 +7,16 @@
       "kind": "txt2img",
       "repo_id": "Tongyi-MAI/Z-Image",
       "reqs": "z-image.txt",
-      "defaults": { "steps": 28, "cfg": 3.5, "width": 1024, "height": 1024, "seed": -1 },
-      "notes": "Undistilled foundation model — quality outputs and training compatibility. 28–50 steps, cfg 3–5.",
-      "trainable": true
+      "defaults": {
+        "steps": 28,
+        "cfg": 3.5,
+        "width": 1024,
+        "height": 1024,
+        "seed": -1
+      },
+      "notes": "Undistilled foundation model \u2014 quality outputs and training compatibility. 28\u201350 steps, cfg 3\u20135.",
+      "trainable": true,
+      "dim_multiple": 16
     },
     {
       "id": "z-image-turbo",
@@ -18,8 +25,15 @@
       "kind": "txt2img",
       "repo_id": "Tongyi-MAI/Z-Image-Turbo",
       "reqs": "z-image.txt",
-      "defaults": { "steps": 8, "cfg": 0, "width": 1024, "height": 1024, "seed": -1 },
-      "notes": "High-speed distilled model. CFG defaults to 0."
+      "defaults": {
+        "steps": 8,
+        "cfg": 0,
+        "width": 1024,
+        "height": 1024,
+        "seed": -1
+      },
+      "notes": "High-speed distilled model. CFG defaults to 0.",
+      "dim_multiple": 16
     },
     {
       "id": "qwen-image-2512",
@@ -28,9 +42,16 @@
       "kind": "txt2img",
       "repo_id": "Qwen/Qwen-Image-2512",
       "reqs": "qwen-image.txt",
-      "defaults": { "steps": 30, "cfg": 4.0, "width": 1024, "height": 1024, "seed": -1 },
+      "defaults": {
+        "steps": 30,
+        "cfg": 4.0,
+        "width": 1024,
+        "height": 1024,
+        "seed": -1
+      },
       "notes": "Qwen image generation model (Dec 2025 update).",
-      "trainable": true
+      "trainable": true,
+      "dim_multiple": 16
     },
     {
       "id": "qwen-image-edit-2511",
@@ -39,8 +60,15 @@
       "kind": "edit",
       "repo_id": "Qwen/Qwen-Image-Edit-2511",
       "reqs": "qwen-image.txt",
-      "defaults": { "steps": 30, "cfg": 4.0, "width": 1024, "height": 1024, "seed": -1 },
-      "notes": "Image editing model. Requires a reference image."
+      "defaults": {
+        "steps": 30,
+        "cfg": 4.0,
+        "width": 1024,
+        "height": 1024,
+        "seed": -1
+      },
+      "notes": "Image editing model. Requires a reference image.",
+      "dim_multiple": 16
     }
   ],
   "components": {
@@ -60,7 +88,26 @@
   "moderation_source": {
     "repo_id": "AdamCodd/vit-base-nsfw-detector",
     "onnx_file": "onnx/model.onnx",
-    "labels": { "input_size": 384, "labels": ["sfw", "nsfw"], "blocked": ["nsfw"],
-                "threshold": 0.7, "mean": [0.5, 0.5, 0.5], "std": [0.5, 0.5, 0.5] }
+    "labels": {
+      "input_size": 384,
+      "labels": [
+        "sfw",
+        "nsfw"
+      ],
+      "blocked": [
+        "nsfw"
+      ],
+      "threshold": 0.7,
+      "mean": [
+        0.5,
+        0.5,
+        0.5
+      ],
+      "std": [
+        0.5,
+        0.5,
+        0.5
+      ]
+    }
   }
 }

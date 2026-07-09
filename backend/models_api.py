@@ -35,7 +35,7 @@ def list_models():
         with _dl_lock:
             dl = _downloads.get(m["id"], {})
         out.append({
-            **{k: m.get(k) for k in ("id", "name", "family", "kind", "repo_id", "defaults", "notes", "trainable")},
+            **{k: m.get(k) for k in ("id", "name", "family", "kind", "repo_id", "defaults", "notes", "trainable", "dim_multiple")},
             "weights": _weights_status(m),
             "download": {k: dl.get(k) for k in ("progress", "detail")} if dl else None,
             "env": env_status(m["id"])["status"] if not config.MOCK else "mock",

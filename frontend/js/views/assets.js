@@ -6,6 +6,17 @@ import { h, clear, toast, lightbox, confirmModal, spinner, fmtBytes } from '../u
 
 const urlCache = new Map(); // asset id -> objectURL (decrypted)
 
+// Shared: decrypt an asset blob to an object URL (cached). Used here and by
+// the Running queue to show completed generations.
+export async function decryptedAssetURL(assetId) {
+  if (urlCache.has(assetId)) return urlCache.get(assetId);
+  const resp = await apiBlob(`/api/assets/${assetId}/blob`);
+  const plain = await decryptBytes(await resp.arrayBuffer());
+  const url = URL.createObjectURL(new Blob([plain], { type: 'image/png' }));
+  urlCache.set(assetId, url);
+  return url;
+}
+
 export async function render(root) {
   let filter = 'all';
   const uploadInput = h('input', { type: 'file', accept: 'image/*', multiple: true, style: 'display:none', onchange: () => uploadRefs(uploadInput.files) });

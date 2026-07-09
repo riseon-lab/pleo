@@ -162,6 +162,25 @@ function newJobCard(trainable, datasets, meta) {
   }, 'Generate');
   const steps = h('input', { type: 'number', min: 50, max: 20000, step: 250, value: 2000 });
   const stepsHint = h('span', { class: 'muted' }, '250 → 20,000 in steps of 250 — or type any count (e.g. 300)');
+  const suggestText = h('span', { class: 'muted' }, '');
+  const suggestBtn = h('button', { class: 'btn small ghost', hidden: true }, 'Use');
+  const suggestRow = h('div', { class: 'row gap', style: 'margin-top:4px' }, suggestText, suggestBtn);
+
+  function updateSuggestion() {
+    const ds = datasets.find(d => d.id === dsSel.value);
+    if (!ds || !ds.count) { suggestText.textContent = ''; suggestBtn.hidden = true; return; }
+    // Character-LoRA rule of thumb: ~100 steps/image for Qwen (20B learns
+    // faster per step), ~150 for Z-Image; snapped to 250, clamped 500-6000.
+    const isQwen = (modelSel.value || '').startsWith('qwen');
+    const per = isQwen ? 100 : 150;
+    const suggested = Math.max(500, Math.min(6000, Math.round(ds.count * per / 250) * 250));
+    suggestText.textContent = `Suggested for ${ds.count} images on ${isQwen ? 'Qwen' : 'Z-Image'}: ~${suggested} steps`;
+    suggestBtn.hidden = false;
+    suggestBtn.onclick = () => { steps.value = suggested; };
+  }
+  dsSel.addEventListener('change', updateSuggestion);
+  modelSel.addEventListener('change', updateSuggestion);
+  updateSuggestion();
   const checkpoints = h('input', { type: 'text', value: defaultCheckpoints.join(', ') });
   const samples = h('textarea', { placeholder: 'One sample prompt per line — rendered at every checkpoint', style: 'min-height:60px' });
   const rank = h('input', { type: 'number', min: 1, max: 128, value: 16 });
@@ -221,7 +240,7 @@ function newJobCard(trainable, datasets, meta) {
       h('label', { class: 'field' }, h('span', {}, 'Base model'), modelSel),
       h('label', { class: 'field' }, h('span', {}, 'Trigger word'),
         h('div', { class: 'row gap' }, trigger, genTrigger))),
-    h('label', { class: 'field' }, h('span', {}, 'Total steps'), steps, stepsHint),
+    h('label', { class: 'field' }, h('span', {}, 'Total steps'), steps, stepsHint, suggestRow),
     h('label', { class: 'field' }, h('span', {}, 'Checkpoint saves (steps, comma-separated — manual saves any time)'), checkpoints),
     h('label', { class: 'field' }, h('span', {}, 'Checkpoint sample prompts'), samples),
     h('div', { class: 'grid2' },
