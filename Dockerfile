@@ -1,7 +1,10 @@
 # Pleo — RunPod container.
 # Heavy, stable layers (CUDA, torch) are baked in; the app code itself is
 # pulled from git at boot so day-to-day updates never need an image rebuild.
-FROM nvidia/cuda:12.4.1-cudnn-runtime-ubuntu22.04
+# CUDA 12.8 so torch cu128 kernels cover Blackwell GPUs (RTX 50xx, B200)
+# as well as Ada/Hopper. cu124 builds have no sm_120 kernels and die with
+# "no kernel image is available for execution on the device".
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
@@ -17,8 +20,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Pre-cache torch/torchvision system-wide; model venvs are created with
 # --system-site-packages so they share this install.
 RUN python3 -m pip install --upgrade pip && \
-    python3 -m pip install torch==2.5.1 torchvision==0.20.1 \
-    --index-url https://download.pytorch.org/whl/cu124
+    python3 -m pip install torch==2.9.1 torchvision==0.24.1 \
+    --index-url https://download.pytorch.org/whl/cu128
 
 # Backend deps (small).
 COPY requirements.txt /tmp/requirements.txt
