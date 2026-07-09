@@ -53,6 +53,8 @@ def real_caption(image_bytes: bytes, hint: str) -> str:
     import torch
     from PIL import Image
     image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+    # Bound the vision input so huge dataset images can't blow VRAM.
+    image.thumbnail((1280, 1280))
     prompt = CAPTION_PROMPT + (f" Context: {hint}" if hint else "")
     messages = [{"role": "user", "content": [
         {"type": "image", "image": image},
@@ -112,8 +114,10 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(404, {"error": "not found"})
         except Exception as e:
+            import traceback
+            print(f"[captioner] ERROR on {self.path}: {e}\n{traceback.format_exc()}", flush=True)
             try:
-                self._json(500, {"error": str(e)[:500]})
+                self._json(500, {"error": f"{type(e).__name__}: {str(e)[:400]}"})
             except Exception:
                 pass
 

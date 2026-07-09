@@ -114,7 +114,12 @@ async def caption_image(image_bytes: bytes, prompt_hint: str = "") -> str:
                 "image_b64": base64.b64encode(image_bytes).decode(),
                 "hint": prompt_hint,
             })
-            r.raise_for_status()
+            if r.status_code != 200:
+                try:
+                    msg = r.json().get("error", r.text)
+                except Exception:
+                    msg = r.text
+                raise RuntimeError(f"captioner: {str(msg)[:400]}")
             return r.json()["caption"].strip()
     finally:
         if _state["status"] == "busy":
