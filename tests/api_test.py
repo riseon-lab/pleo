@@ -386,8 +386,8 @@ check("samples listed independently of checkpoints", len(j2.get("samples", [])) 
 steps_saved = [ck["step"] for ck in j2["checkpoints"]]
 check("checkpoints at schedule + final", steps_saved == [100, 200, 300], str(steps_saved))
 check("samples per checkpoint", all(len(ck["samples"]) == 1 for ck in j2["checkpoints"]), str(j2["checkpoints"]))
-sample = j2["checkpoints"][0]["samples"][0]
-r = c.get(f"/api/training/jobs/{tj2}/files/samples/{sample}", headers=H)
+sample = j2["checkpoints"][0]["samples"][0]  # job-dir-relative path, e.g. samples/step_000100_0.png
+r = c.get(f"/api/training/jobs/{tj2}/files/{sample}", headers=H)
 check("checkpoint sample is a PNG", r.status_code == 200 and r.content[:4] == b"\x89PNG", str(r.status_code))
 r = c.get(f"/api/training/jobs/{tj2}/files/checkpoints/../../../../account.json", headers=H)
 check("training file traversal rejected", r.status_code in (403, 404), str(r.status_code))

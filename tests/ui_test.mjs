@@ -90,6 +90,10 @@ await page.keyboard.press('Escape');
 // ---- assets: decrypt on the fly ----
 await page.click('.nav-item[data-path="assets"]');
 await page.waitForSelector('.asset-tile img', { timeout: 15000 });
+await page.waitForFunction(() => {
+  const i = document.querySelector('.asset-tile img');
+  return i && i.naturalWidth > 0;
+}, { timeout: 15000 });
 const natural = await page.locator('.asset-tile img').first().evaluate(img => ({ w: img.naturalWidth, h: img.naturalHeight, src: img.src.slice(0, 5) }));
 check('asset decrypts to a real image', natural.w === 832 && natural.h === 1216 && natural.src === 'blob:', JSON.stringify(natural));
 await page.click('.asset-tile');
