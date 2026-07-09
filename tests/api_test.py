@@ -324,6 +324,8 @@ r = c.post("/api/training/jobs", headers=H, json={**base_job, "optimizer": "sgd-
 check("unknown optimizer rejected", r.status_code == 400, r.text)
 r = c.post("/api/training/jobs", headers=H, json={**base_job, "lr_scheduler": "wavy"})
 check("unknown lr scheduler rejected", r.status_code == 400, r.text)
+r = c.post("/api/training/jobs", headers=H, json={**base_job, "vram_profile": "gigantic"})
+check("unknown vram profile rejected", r.status_code == 400, r.text)
 meta_t = c.get("/api/training/jobs", headers=H).json()
 check("optimizer/scheduler option lists exposed",
       "adamw8bit" in meta_t["optimizers"] and "cosine" in meta_t["lr_schedulers"], str(meta_t.keys()))
@@ -354,11 +356,14 @@ check("sec_per_step measured", j1["sec_per_step"] is not None and j1["sec_per_st
 r = c.post("/api/training/jobs", headers=H, json={**base_job, "name": "tiny run", "steps": 300,
                                                   "checkpoint_steps": [100, 200],
                                                   "optimizer": "prodigy", "lr_scheduler": "cosine",
-                                                  "alpha": 32})
+                                                  "alpha": 32, "vram_profile": "high",
+                                                  "gradient_checkpointing": False})
 check("short training job starts", r.status_code == 200, r.text[:200])
 tj2 = r.json()["id"]
 check("optimizer/scheduler/alpha recorded", r.json()["optimizer"] == "prodigy"
       and r.json()["lr_scheduler"] == "cosine" and r.json()["alpha"] == 32, r.text[:300])
+check("vram profile + grad ckpt recorded", r.json()["vram_profile"] == "high"
+      and r.json()["gradient_checkpointing"] is False, r.text[:300])
 deadline = time.time() + 60
 j2 = None
 while time.time() < deadline:

@@ -33,6 +33,9 @@ DEFAULT_CHECKPOINTS = [250, 500, 750, 1000, 1500, 2000]
 # Names validated against ostris/ai-toolkit (toolkit/optimizer.py, scheduler.py).
 OPTIMIZERS = ["adamw8bit", "adamw", "adam8bit", "adafactor", "prodigy", "lion8bit", "automagic"]
 LR_SCHEDULERS = ["constant", "cosine", "cosine_with_restarts", "linear", "constant_with_warmup"]
+# low: 24GB-class cards, full quantization (the official recipes).
+# balanced: 48GB-class. high: 80GB+ — skip quantization for speed.
+VRAM_PROFILES = ["low", "balanced", "high"]
 
 _live: dict = {"job_id": None, "proc": None, "poll_task": None, "hf_key": None}
 _lock = asyncio.Lock()
@@ -90,6 +93,8 @@ class CreateJobBody(BaseModel):
     optimizer: str = "adamw8bit"
     resolution: int = Field(1024, ge=256, le=2048)
     batch_size: int = Field(1, ge=1, le=8)
+    vram_profile: str = "low"
+    gradient_checkpointing: bool = True
     hf_push: Optional[HFPush] = None
     hf_key: Optional[str] = None  # transient; never persisted
 
@@ -104,7 +109,8 @@ def list_jobs():
                            key=lambda j: j["created"], reverse=True),
             "active": _live["job_id"], "mock": config.MOCK,
             "default_checkpoints": DEFAULT_CHECKPOINTS,
-            "optimizers": OPTIMIZERS, "lr_schedulers": LR_SCHEDULERS}
+            "optimizers": OPTIMIZERS, "lr_schedulers": LR_SCHEDULERS,
+            "vram_profiles": VRAM_PROFILES}
 
 
 @router.post("/jobs")
@@ -118,6 +124,8 @@ async def create_job(body: CreateJobBody):
         raise HTTPException(400, f"optimizer must be one of {', '.join(OPTIMIZERS)}")
     if body.lr_scheduler not in LR_SCHEDULERS:
         raise HTTPException(400, f"lr_scheduler must be one of {', '.join(LR_SCHEDULERS)}")
+    if body.vram_profile not in VRAM_PROFILES:
+        raise HTTPException(400, f"vram_profile must be one of {', '.join(VRAM_PROFILES)}")
     meta = dataset_meta(body.dataset_id)
     items = dataset_items(body.dataset_id)
     if not items:
@@ -140,6 +148,8 @@ async def create_job(body: CreateJobBody):
         "rank": body.rank, "alpha": body.alpha or body.rank, "lr": body.lr,
         "lr_scheduler": body.lr_scheduler, "optimizer": body.optimizer,
         "resolution": body.resolution, "batch_size": body.batch_size,
+        "vram_profile": body.vram_profile,
+        "gradient_checkpointing": body.gradient_checkpointing,
         "hf_push": body.hf_push.model_dump() if body.hf_push else None,
         "status": "created", "step": 0, "loss": None, "sec_per_step": None,
         "checkpoints": [], "error": None,

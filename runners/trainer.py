@@ -107,25 +107,32 @@ def build_toolkit_config(job: dict) -> Path:
         raise RuntimeError(f"Family {base['family']} is not trainable")
     save_every = 250
     is_qwen = base["family"].startswith("qwen")
+    profile = job.get("vram_profile", "low")  # low (24GB) | balanced (48GB) | high (80GB+)
     train = {
         "batch_size": job.get("batch_size", 1),
         "steps": job["steps"],
         "gradient_accumulation": 1,
         "train_unet": True,
         "train_text_encoder": False,
-        "gradient_checkpointing": True,
+        "gradient_checkpointing": bool(job.get("gradient_checkpointing", True)),
         "noise_scheduler": "flowmatch",
         "optimizer": job.get("optimizer", "adamw8bit"),
         "lr": job.get("lr", 1e-4),
         "lr_scheduler": job.get("lr_scheduler", "constant"),
         "dtype": "bf16",
     }
-    model = {"name_or_path": base["repo_id"], "arch": arch, "quantize": True}
+    model = {"name_or_path": base["repo_id"], "arch": arch}
     if is_qwen:
-        # Per the official qwen example: cache text embeddings + quantize the
-        # text encoder. (The uint3 ARA is only needed on 24GB cards.)
+        # 20B transformer + VL text encoder. bf16 weights alone are ~40GB, so
+        # weight quantization stays on below the 80GB+ profile. Text-embedding
+        # caching is a pure win at any size (encoder runs once, then unloads).
         train["cache_text_embeddings"] = True
-        model.update(quantize_te=True, qtype_te="qfloat8")
+        model["quantize"] = profile != "high"
+        if model["quantize"]:
+            model.update(quantize_te=True, qtype_te="qfloat8")
+    else:
+        # Z-Image is 6B (~12GB bf16): only the 24GB profile needs quantization.
+        model["quantize"] = profile == "low"
     cfg = {
         "job": "extension",
         "config": {

@@ -5,6 +5,13 @@ import { h, clear, toast, confirmModal, fmtBytes, lightbox } from '../ui.js';
 import { getApiKeys } from './settings.js';
 
 const RATE_KEY = 'pleo-runpod-rate';
+const VRAM_KEY = 'pleo-vram-profile';
+
+const VRAM_LABELS = {
+  low: '24 GB — safe (fully quantized)',
+  balanced: '48 GB — balanced',
+  high: '80 GB+ — fast (no quantization)',
+};
 
 export async function render(root) {
   const [meta, { models }, { datasets }] = await Promise.all([
@@ -131,6 +138,11 @@ function newJobCard(trainable, datasets, meta) {
     h('option', { value: o, selected: o === 'adamw8bit' }, o)));
   const resolution = h('input', { type: 'number', min: 256, max: 2048, step: 64, value: 1024 });
   const batch = h('input', { type: 'number', min: 1, max: 8, value: 1 });
+  const savedProfile = localStorage.getItem(VRAM_KEY) || 'low';
+  const vram = h('select', {}, (meta.vram_profiles || ['low']).map(p =>
+    h('option', { value: p, selected: p === savedProfile }, VRAM_LABELS[p] || p)));
+  vram.onchange = () => localStorage.setItem(VRAM_KEY, vram.value);
+  const gradCkpt = h('input', { type: 'checkbox', checked: true });
   const rate = h('input', { type: 'number', min: 0, step: 0.01, value: localStorage.getItem(RATE_KEY) || '', placeholder: 'e.g. 0.69' });
   rate.oninput = () => localStorage.setItem(RATE_KEY, rate.value);
   const pushToggle = h('input', { type: 'checkbox' });
@@ -153,6 +165,7 @@ function newJobCard(trainable, datasets, meta) {
           rank: +rank.value, alpha: alpha.value ? +alpha.value : null,
           lr: +lr.value, lr_scheduler: scheduler.value, optimizer: optimizer.value,
           resolution: +resolution.value, batch_size: +batch.value,
+          vram_profile: vram.value, gradient_checkpointing: gradCkpt.checked,
         };
         if (pushToggle.checked && pushRepo.value.trim()) {
           body.hf_push = { repo_id: pushRepo.value.trim(), private: true };
@@ -183,7 +196,12 @@ function newJobCard(trainable, datasets, meta) {
       h('label', { class: 'field' }, h('span', {}, 'LR scheduler'), scheduler),
       h('label', { class: 'field' }, h('span', {}, 'Optimizer'), optimizer),
       h('label', { class: 'field' }, h('span', {}, 'Resolution'), resolution),
-      h('label', { class: 'field' }, h('span', {}, 'Batch size'), batch)),
+      h('label', { class: 'field' }, h('span', {}, 'Batch size'), batch),
+      h('label', { class: 'field' }, h('span', {}, 'GPU VRAM profile'), vram,
+        h('span', { class: 'muted', style: 'font-size:12px' }, 'Higher = faster (less/no quantization); pick what fits the card')),
+      h('label', { class: 'field' }, h('span', {}, 'Gradient checkpointing'),
+        h('div', { class: 'row gap', style: 'padding:9px 0' }, gradCkpt,
+          h('span', { class: 'muted', style: 'font-size:12px' }, 'Uncheck only with big VRAM headroom — faster steps, much more memory')))),
     h('div', { class: 'grid2' },
       h('label', { class: 'field' }, h('span', {}, 'RunPod $/hr (for ETA cost)'), rate),
       h('label', { class: 'field' }, h('span', {}, 'Push to Hugging Face on completion'),
