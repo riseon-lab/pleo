@@ -7,15 +7,16 @@ import { getApiKeys } from './settings.js';
 const RATE_KEY = 'pleo-runpod-rate';
 
 export async function render(root) {
-  const [{ jobs, active, mock, default_checkpoints }, { models }, { datasets }] = await Promise.all([
+  const [meta, { models }, { datasets }] = await Promise.all([
     api('/api/training/jobs'), api('/api/models'), api('/api/datasets')]);
+  const { jobs, mock } = meta;
   const trainable = models.filter(m => m.trainable);
 
   const jobsHost = h('div', {});
   root.append(
     h('div', { class: 'view-head' }, h('h1', {}, 'Training'),
       mock ? h('span', { class: 'badge warn' }, 'mock mode') : null),
-    newJobCard(trainable, datasets, default_checkpoints),
+    newJobCard(trainable, datasets, meta),
     h('h2', { class: 'section-gap' }, 'Jobs'),
     jobsHost);
 
@@ -50,7 +51,10 @@ export async function render(root) {
 
 // ---------------- new job form ----------------
 
-function newJobCard(trainable, datasets, defaultCheckpoints) {
+function newJobCard(trainable, datasets, meta) {
+  const defaultCheckpoints = meta.default_checkpoints;
+  const OPTIMIZERS = meta.optimizers || ['adamw8bit'];
+  const SCHEDULERS = meta.lr_schedulers || ['constant'];
   const name = h('input', { type: 'text', placeholder: 'e.g. my-character-v1' });
   const dsSel = h('select', {}, datasets.map(d =>
     h('option', { value: d.id }, `${d.name} (${d.count} imgs, ${d.captioned} captioned)`)));
@@ -69,7 +73,12 @@ function newJobCard(trainable, datasets, defaultCheckpoints) {
   const checkpoints = h('input', { type: 'text', value: defaultCheckpoints.join(', ') });
   const samples = h('textarea', { placeholder: 'One sample prompt per line — rendered at every checkpoint', style: 'min-height:60px' });
   const rank = h('input', { type: 'number', min: 1, max: 128, value: 16 });
+  const alpha = h('input', { type: 'number', min: 1, max: 256, placeholder: '= rank' });
   const lr = h('input', { type: 'text', value: '1e-4' });
+  const scheduler = h('select', {}, SCHEDULERS.map(s =>
+    h('option', { value: s, selected: s === 'constant' }, s.replaceAll('_', ' '))));
+  const optimizer = h('select', {}, OPTIMIZERS.map(o =>
+    h('option', { value: o, selected: o === 'adamw8bit' }, o)));
   const resolution = h('input', { type: 'number', min: 256, max: 2048, step: 64, value: 1024 });
   const batch = h('input', { type: 'number', min: 1, max: 8, value: 1 });
   const rate = h('input', { type: 'number', min: 0, step: 0.01, value: localStorage.getItem(RATE_KEY) || '', placeholder: 'e.g. 0.69' });
@@ -91,7 +100,9 @@ function newJobCard(trainable, datasets, defaultCheckpoints) {
           steps: +steps.value,
           checkpoint_steps: checkpoints.value.split(',').map(s => +s.trim()).filter(n => n > 0),
           sample_prompts: samples.value.split('\n').map(s => s.trim()).filter(Boolean),
-          rank: +rank.value, lr: +lr.value, resolution: +resolution.value, batch_size: +batch.value,
+          rank: +rank.value, alpha: alpha.value ? +alpha.value : null,
+          lr: +lr.value, lr_scheduler: scheduler.value, optimizer: optimizer.value,
+          resolution: +resolution.value, batch_size: +batch.value,
         };
         if (pushToggle.checked && pushRepo.value.trim()) {
           body.hf_push = { repo_id: pushRepo.value.trim(), private: true };
@@ -117,7 +128,10 @@ function newJobCard(trainable, datasets, defaultCheckpoints) {
     h('label', { class: 'field' }, h('span', {}, 'Checkpoint sample prompts'), samples),
     h('div', { class: 'grid2' },
       h('label', { class: 'field' }, h('span', {}, 'LoRA rank'), rank),
+      h('label', { class: 'field' }, h('span', {}, 'LoRA alpha'), alpha),
       h('label', { class: 'field' }, h('span', {}, 'Learning rate'), lr),
+      h('label', { class: 'field' }, h('span', {}, 'LR scheduler'), scheduler),
+      h('label', { class: 'field' }, h('span', {}, 'Optimizer'), optimizer),
       h('label', { class: 'field' }, h('span', {}, 'Resolution'), resolution),
       h('label', { class: 'field' }, h('span', {}, 'Batch size'), batch)),
     h('div', { class: 'grid2' },
@@ -199,6 +213,8 @@ function jobCard(job, refresh) {
         h('h3', { style: 'margin-bottom:2px' }, job.name),
         h('div', { class: 'muted' },
           `${job.base_model} · dataset ${job.dataset_name} · ${job.steps} steps` +
+          ` · rank ${job.rank}/${job.alpha ?? job.rank}` +
+          (job.optimizer ? ` · ${job.optimizer} · ${job.lr_scheduler}` : '') +
           (job.trigger_word ? ` · trigger “${job.trigger_word}”` : ''))),
       h('span', { class: `badge ${badgeCls}` }, job.status)),
     h('div', { class: 'progress', style: 'margin:12px 0 6px' }, h('div', { style: `width:${pct}%` })),

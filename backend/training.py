@@ -30,6 +30,10 @@ PORT = int(os.environ.get("PLEO_TRAINER_PORT", "8803"))
 
 DEFAULT_CHECKPOINTS = [250, 500, 750, 1000, 1500, 2000]
 
+# Names validated against ostris/ai-toolkit (toolkit/optimizer.py, scheduler.py).
+OPTIMIZERS = ["adamw8bit", "adamw", "adam8bit", "adafactor", "prodigy", "lion8bit", "automagic"]
+LR_SCHEDULERS = ["constant", "cosine", "cosine_with_restarts", "linear", "constant_with_warmup"]
+
 _live: dict = {"job_id": None, "proc": None, "poll_task": None, "hf_key": None}
 _lock = asyncio.Lock()
 
@@ -80,7 +84,10 @@ class CreateJobBody(BaseModel):
     checkpoint_steps: list[int] = []
     sample_prompts: list[str] = Field([], max_length=8)
     rank: int = Field(16, ge=1, le=128)
+    alpha: Optional[int] = Field(None, ge=1, le=256)  # defaults to rank
     lr: float = Field(1e-4, gt=0, le=1)
+    lr_scheduler: str = "constant"
+    optimizer: str = "adamw8bit"
     resolution: int = Field(1024, ge=256, le=2048)
     batch_size: int = Field(1, ge=1, le=8)
     hf_push: Optional[HFPush] = None
@@ -96,7 +103,8 @@ def list_jobs():
     return {"jobs": sorted((_public(j) for j in _jobs()),
                            key=lambda j: j["created"], reverse=True),
             "active": _live["job_id"], "mock": config.MOCK,
-            "default_checkpoints": DEFAULT_CHECKPOINTS}
+            "default_checkpoints": DEFAULT_CHECKPOINTS,
+            "optimizers": OPTIMIZERS, "lr_schedulers": LR_SCHEDULERS}
 
 
 @router.post("/jobs")
@@ -106,6 +114,10 @@ async def create_job(body: CreateJobBody):
     model = get_model(body.base_model)
     if not model.get("trainable"):
         raise HTTPException(400, f"{model['name']} is not a trainable base (use Z Image Base or Qwen Image)")
+    if body.optimizer not in OPTIMIZERS:
+        raise HTTPException(400, f"optimizer must be one of {', '.join(OPTIMIZERS)}")
+    if body.lr_scheduler not in LR_SCHEDULERS:
+        raise HTTPException(400, f"lr_scheduler must be one of {', '.join(LR_SCHEDULERS)}")
     meta = dataset_meta(body.dataset_id)
     items = dataset_items(body.dataset_id)
     if not items:
@@ -125,7 +137,8 @@ async def create_job(body: CreateJobBody):
         "steps": body.steps,
         "checkpoint_steps": checkpoints,
         "sample_prompts": [p.strip() for p in body.sample_prompts if p.strip()],
-        "rank": body.rank, "lr": body.lr,
+        "rank": body.rank, "alpha": body.alpha or body.rank, "lr": body.lr,
+        "lr_scheduler": body.lr_scheduler, "optimizer": body.optimizer,
         "resolution": body.resolution, "batch_size": body.batch_size,
         "hf_push": body.hf_push.model_dump() if body.hf_push else None,
         "status": "created", "step": 0, "loss": None, "sec_per_step": None,

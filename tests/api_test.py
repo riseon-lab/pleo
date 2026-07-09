@@ -311,6 +311,13 @@ base_job = {"name": "cancel me", "dataset_id": ds_id, "base_model": "z-image-bas
             "resolution": 512, "batch_size": 1}
 r = c.post("/api/training/jobs", headers=H, json={**base_job, "base_model": "qwen-image-edit-2511"})
 check("non-trainable base rejected", r.status_code == 400, r.text)
+r = c.post("/api/training/jobs", headers=H, json={**base_job, "optimizer": "sgd-turbo"})
+check("unknown optimizer rejected", r.status_code == 400, r.text)
+r = c.post("/api/training/jobs", headers=H, json={**base_job, "lr_scheduler": "wavy"})
+check("unknown lr scheduler rejected", r.status_code == 400, r.text)
+meta_t = c.get("/api/training/jobs", headers=H).json()
+check("optimizer/scheduler option lists exposed",
+      "adamw8bit" in meta_t["optimizers"] and "cosine" in meta_t["lr_schedulers"], str(meta_t.keys()))
 r = c.post("/api/training/jobs", headers=H, json=base_job)
 check("training job starts", r.status_code == 200 and r.json()["status"] == "running", r.text[:200])
 tj1 = r.json()["id"]
@@ -336,9 +343,13 @@ check("manual checkpoint was saved before cancel", len(j1["checkpoints"]) >= 1, 
 check("sec_per_step measured", j1["sec_per_step"] is not None and j1["sec_per_step"] > 0, str(j1["sec_per_step"]))
 
 r = c.post("/api/training/jobs", headers=H, json={**base_job, "name": "tiny run", "steps": 300,
-                                                  "checkpoint_steps": [100, 200]})
+                                                  "checkpoint_steps": [100, 200],
+                                                  "optimizer": "prodigy", "lr_scheduler": "cosine",
+                                                  "alpha": 32})
 check("short training job starts", r.status_code == 200, r.text[:200])
 tj2 = r.json()["id"]
+check("optimizer/scheduler/alpha recorded", r.json()["optimizer"] == "prodigy"
+      and r.json()["lr_scheduler"] == "cosine" and r.json()["alpha"] == 32, r.text[:300])
 deadline = time.time() + 60
 j2 = None
 while time.time() < deadline:

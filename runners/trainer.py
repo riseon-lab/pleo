@@ -98,11 +98,33 @@ ARCH_BY_FAMILY = {"zimage": "z_image", "qwen-image": "qwen_image"}
 
 
 def build_toolkit_config(job: dict) -> Path:
+    """Mirrors ai-toolkit's official example configs (e.g.
+    config/examples/train_lora_qwen_image_24gb.yaml)."""
     base = CONFIG["base_model"]
     arch = ARCH_BY_FAMILY.get(base["family"])
     if not arch:
         raise RuntimeError(f"Family {base['family']} is not trainable")
     save_every = 250
+    is_qwen = base["family"].startswith("qwen")
+    train = {
+        "batch_size": job.get("batch_size", 1),
+        "steps": job["steps"],
+        "gradient_accumulation": 1,
+        "train_unet": True,
+        "train_text_encoder": False,
+        "gradient_checkpointing": True,
+        "noise_scheduler": "flowmatch",
+        "optimizer": job.get("optimizer", "adamw8bit"),
+        "lr": job.get("lr", 1e-4),
+        "lr_scheduler": job.get("lr_scheduler", "constant"),
+        "dtype": "bf16",
+    }
+    model = {"name_or_path": base["repo_id"], "arch": arch, "quantize": True}
+    if is_qwen:
+        # Per the official qwen example: cache text embeddings + quantize the
+        # text encoder. (The uint3 ARA is only needed on 24GB cards.)
+        train["cache_text_embeddings"] = True
+        model.update(quantize_te=True, qtype_te="qfloat8")
     cfg = {
         "job": "extension",
         "config": {
@@ -113,25 +135,21 @@ def build_toolkit_config(job: dict) -> Path:
                 "device": "cuda:0",
                 "trigger_word": job.get("trigger_word") or None,
                 "network": {"type": "lora", "linear": job.get("rank", 16),
-                            "linear_alpha": job.get("rank", 16)},
+                            "linear_alpha": job.get("alpha") or job.get("rank", 16)},
                 "save": {"dtype": "float16", "save_every": save_every,
                          "max_step_saves_to_keep": 1000},
                 "datasets": [{"folder_path": CONFIG["dataset_dir"],
                               "caption_ext": "txt", "caption_dropout_rate": 0.05,
+                              "shuffle_tokens": False,
+                              "cache_latents_to_disk": True,
                               "resolution": [job.get("resolution", 1024)]}],
-                "train": {"batch_size": job.get("batch_size", 1),
-                          "steps": job["steps"], "gradient_accumulation_steps": 1,
-                          "train_unet": True, "train_text_encoder": False,
-                          "lr": job.get("lr", 1e-4), "optimizer": "adamw8bit",
-                          "dtype": "bf16", "gradient_checkpointing": True,
-                          "noise_scheduler": "flowmatch"},
-                "model": {"name_or_path": base["repo_id"], "arch": arch,
-                          "quantize": True},
+                "train": train,
+                "model": model,
                 "sample": {"sampler": "flowmatch", "sample_every": save_every,
                            "width": 1024, "height": 1024,
                            "prompts": job.get("sample_prompts", []),
-                           "seed": 42, "walk_seed": True,
-                           "guidance_scale": 3.5, "sample_steps": 25},
+                           "neg": "", "seed": 42, "walk_seed": True,
+                           "guidance_scale": 3, "sample_steps": 25},
             }],
         },
     }
