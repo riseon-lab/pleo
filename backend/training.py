@@ -119,6 +119,22 @@ def _toolkit_worker() -> None:
         if proc.wait() != 0:
             raise RuntimeError(f"pip install failed: {_toolkit['detail']}")
 
+        # opencv-python needs libGL.so.1, which slim CUDA images don't have;
+        # the headless build is API-identical and dependency-free.
+        _toolkit.update(detail="swapping opencv for headless build (no libGL needed)")
+        pub()
+        subprocess.run([py, "-m", "pip", "uninstall", "-y",
+                        "opencv-python", "opencv-contrib-python"],
+                       capture_output=True, text=True, timeout=300)
+        r = subprocess.run([py, "-m", "pip", "install", "opencv-python-headless"],
+                           capture_output=True, text=True, timeout=600)
+        if r.returncode != 0:
+            raise RuntimeError(f"opencv-headless install failed: {r.stderr[-250:]}")
+        chk_cv = subprocess.run([py, "-c", "import cv2; print(cv2.__version__)"],
+                                capture_output=True, text=True, timeout=120)
+        if chk_cv.returncode != 0:
+            raise RuntimeError(f"cv2 still not importable: {chk_cv.stderr[-250:]}")
+
         # Sanity: torch must import inside the trainer venv and see the GPU
         # (ai-toolkit's requirements may have replaced the shared torch).
         chk = subprocess.run([py, "-c", "import torch; print(torch.__version__, torch.cuda.is_available())"],
