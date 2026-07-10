@@ -360,9 +360,9 @@ export async function render(root) {
       clear(badgeHost).append(runnerBadge(ev, models));
       return;
     }
-    if (ev.type === 'step' && ev.preview_b64) {
+    if (ev.type === 'step') {
       liveJobId = ev.job_id;
-      showPreview(`data:image/png;base64,${ev.preview_b64}`);
+      if (ev.preview_b64) showPreview(`data:image/png;base64,${ev.preview_b64}`);
       const pct = ev.total ? Math.round(ev.step / ev.total * 100) : 0;
       setStatus(`Step ${ev.step} / ${ev.total}`, { cancellable: true, progress: pct });
     } else if (ev.type === 'job') {

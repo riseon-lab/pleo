@@ -193,9 +193,18 @@ def real_generate(params: dict, emit) -> dict:
         preview_b64 = None
         latents = callback_kwargs.get("latents")
         try:
+            lat = None
             if latents is not None and latents.dim() == 4:
-                # Cheap latent-space "noise" preview: 3 channels normalized.
+                # Classic (B, C, H, W) latents: 3 channels normalized.
                 lat = latents[0, :3].float()
+            elif latents is not None and latents.dim() == 3:
+                # Packed latents (B, seq, C) — Qwen-Image style. Unpack the
+                # token sequence back onto its (H/16, W/16) grid.
+                _, seq, ch = latents.shape
+                h_lat, w_lat = params["height"] // 16, params["width"] // 16
+                if seq == h_lat * w_lat:
+                    lat = latents[0].view(h_lat, w_lat, ch).permute(2, 0, 1)[:3].float()
+            if lat is not None:
                 lat = (lat - lat.amin()) / (lat.amax() - lat.amin() + 1e-6)
                 img = (lat.clamp(0, 1) * 255).byte().permute(1, 2, 0).cpu().numpy()
                 from PIL import Image
@@ -205,6 +214,8 @@ def real_generate(params: dict, emit) -> dict:
                 preview_b64 = base64.b64encode(buf.getvalue()).decode()
         except Exception:
             pass
+        # Always emit — the step event drives the progress bar even when no
+        # preview could be built.
         emit({"type": "step", "step": step + 1, "total": total, "preview_b64": preview_b64})
         return callback_kwargs
 
