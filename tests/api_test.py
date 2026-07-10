@@ -348,6 +348,7 @@ check("unknown vram profile rejected", r.status_code == 400, r.text)
 meta_t = c.get("/api/training/jobs", headers=H).json()
 check("optimizer/scheduler option lists exposed",
       "adamw8bit" in meta_t["optimizers"] and "cosine" in meta_t["lr_schedulers"], str(meta_t.keys()))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from backend.training import effective_save_every
 check("off-grid checkpoint (2999) doesn't collapse save interval",
       effective_save_every([1500, 2000, 2500, 2999], 3000) == 500,
