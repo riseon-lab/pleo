@@ -182,6 +182,22 @@ function newJobCard(trainable, datasets, meta) {
   modelSel.addEventListener('change', updateSuggestion);
   updateSuggestion();
   const checkpoints = h('input', { type: 'text', value: defaultCheckpoints.join(', ') });
+  const ckptHint = h('span', { class: 'muted' }, '');
+
+  function updateCkptHint() {
+    const total = +steps.value || 0;
+    const sched = checkpoints.value.split(',').map(s => +s.trim())
+      .filter(n => n > 0 && n <= total)
+      .map(n => Math.max(50, Math.round(n / 50) * 50));
+    if (!sched.length) { ckptHint.textContent = ''; return; }
+    const gcd = (a, b) => b ? gcd(b, a % b) : a;
+    const every = Math.max(50, sched.reduce((a, b) => gcd(a, b)));
+    ckptHint.textContent = `Real runs save every ${every} steps (ai-toolkit supports one uniform interval; the final step always saves)`;
+    ckptHint.style.color = every < 250 ? 'var(--danger)' : '';
+  }
+  checkpoints.addEventListener('input', updateCkptHint);
+  steps.addEventListener('input', updateCkptHint);
+  updateCkptHint();
   const samples = h('textarea', { placeholder: 'One sample prompt per line — rendered at every checkpoint', style: 'min-height:60px' });
   const rank = h('input', { type: 'number', min: 1, max: 128, value: 16 });
   const alpha = h('input', { type: 'number', min: 1, max: 256, placeholder: '= rank' });
@@ -241,7 +257,7 @@ function newJobCard(trainable, datasets, meta) {
       h('label', { class: 'field' }, h('span', {}, 'Trigger word'),
         h('div', { class: 'row gap' }, trigger, genTrigger))),
     h('label', { class: 'field' }, h('span', {}, 'Total steps'), steps, stepsHint, suggestRow),
-    h('label', { class: 'field' }, h('span', {}, 'Checkpoint saves (steps, comma-separated — manual saves any time)'), checkpoints),
+    h('label', { class: 'field' }, h('span', {}, 'Checkpoint saves (steps, comma-separated — manual saves any time)'), checkpoints, ckptHint),
     h('label', { class: 'field' }, h('span', {}, 'Checkpoint sample prompts'), samples),
     h('div', { class: 'grid2' },
       h('label', { class: 'field' }, h('span', {}, 'LoRA rank'), rank),
@@ -360,6 +376,7 @@ function jobCard(job, refresh) {
         h('h3', { style: 'margin-bottom:2px' }, job.name),
         h('div', { class: 'muted' },
           `${job.base_model} · dataset ${job.dataset_name} · ${job.steps} steps` +
+          (job.save_every ? ` · saves every ${job.save_every}` : '') +
           ` · rank ${job.rank}/${job.alpha ?? job.rank}` +
           (job.optimizer ? ` · ${job.optimizer} · ${job.lr_scheduler}` : '') +
           (job.trigger_word ? ` · trigger “${job.trigger_word}”` : ''))),

@@ -348,6 +348,12 @@ check("unknown vram profile rejected", r.status_code == 400, r.text)
 meta_t = c.get("/api/training/jobs", headers=H).json()
 check("optimizer/scheduler option lists exposed",
       "adamw8bit" in meta_t["optimizers"] and "cosine" in meta_t["lr_schedulers"], str(meta_t.keys()))
+from backend.training import effective_save_every
+check("off-grid checkpoint (2999) doesn't collapse save interval",
+      effective_save_every([1500, 2000, 2500, 2999], 3000) == 500,
+      str(effective_save_every([1500, 2000, 2500, 2999], 3000)))
+check("default schedule -> every 250", effective_save_every([250, 500, 750, 1000, 1500, 2000], 2000) == 250)
+check("1000-step schedule -> every 1000", effective_save_every([1000, 2000, 3000, 4000, 5000], 5000) == 1000)
 r = c.post("/api/training/jobs", headers=H, json=base_job)
 check("training job starts", r.status_code == 200 and r.json()["status"] == "running", r.text[:200])
 tj1 = r.json()["id"]

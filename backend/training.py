@@ -2,6 +2,7 @@
 records persist to data/training/jobs.json; artifacts (checkpoints, samples,
 logs) live under data/training/<job_id>/."""
 import asyncio
+import math
 import os
 import re
 import shutil
@@ -238,6 +239,17 @@ class CreateJobBody(BaseModel):
     hf_key: Optional[str] = None  # transient; never persisted
 
 
+def effective_save_every(schedule: list[int], steps: int) -> int:
+    """ai-toolkit only supports a uniform save interval. Round each requested
+    step to the nearest 50 before taking the GCD so an off-grid entry (e.g.
+    2999) can't collapse the interval to 50; ai-toolkit always saves at the
+    final step anyway."""
+    sched = [max(50, round(s / 50) * 50) for s in schedule if 0 < s <= steps]
+    if not sched:
+        return 250
+    return max(50, math.gcd(*sched))
+
+
 def _public(job: dict) -> dict:
     return {k: v for k, v in job.items() if k != "hf_key"}
 
@@ -274,6 +286,7 @@ async def create_job(body: CreateJobBody):
         raise HTTPException(400, "Hugging Face push requires your HF key (sent transiently)")
     checkpoints = sorted({s for s in (body.checkpoint_steps or DEFAULT_CHECKPOINTS)
                           if 0 < s <= body.steps})
+    save_every = effective_save_every(checkpoints, body.steps)
     job = {
         "id": new_id(8),
         "name": body.name.strip(),
@@ -283,6 +296,7 @@ async def create_job(body: CreateJobBody):
         "trigger_word": body.trigger_word.strip(),
         "steps": body.steps,
         "checkpoint_steps": checkpoints,
+        "save_every": save_every,
         "sample_prompts": [p.strip() for p in body.sample_prompts if p.strip()],
         "rank": body.rank, "alpha": body.alpha or body.rank, "lr": body.lr,
         "lr_scheduler": body.lr_scheduler, "optimizer": body.optimizer,

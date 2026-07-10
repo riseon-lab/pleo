@@ -120,12 +120,14 @@ def build_toolkit_config(job: dict) -> Path:
     arch = ARCH_BY_FAMILY.get(base["family"])
     if not arch:
         raise RuntimeError(f"Family {base['family']} is not trainable")
-    # ai-toolkit only supports a uniform interval; use the GCD of the
-    # requested schedule so every requested step IS a save point
-    # (e.g. [1000..5000] -> 1000; the default [250,500,750,1000,1500,2000] -> 250).
-    sched = [s for s in job.get("checkpoint_steps", []) if isinstance(s, int) and s > 0]
-    save_every = math.gcd(*sched) if sched else 250
-    save_every = max(50, min(save_every, job["steps"]))
+    # Uniform save interval, computed by the backend (rounded-to-50 GCD of the
+    # schedule so an off-grid entry like 2999 can't collapse it to 50).
+    save_every = int(job.get("save_every") or 0)
+    if not save_every:
+        sched = [max(50, round(s / 50) * 50) for s in job.get("checkpoint_steps", [])
+                 if isinstance(s, int) and s > 0]
+        save_every = max(50, math.gcd(*sched)) if sched else 250
+    save_every = min(save_every, job["steps"])
     is_qwen = base["family"].startswith("qwen")
     profile = job.get("vram_profile", "low")  # low (24GB) | balanced (48GB) | high (80GB+)
     train = {
