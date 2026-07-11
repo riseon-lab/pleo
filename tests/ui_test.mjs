@@ -100,6 +100,8 @@ await page.click('.asset-tile');
 await page.waitForSelector('.lightbox-meta');
 const metaTxt = await page.locator('.lightbox-meta').textContent();
 check('decrypted metadata shows prompt + seed', metaTxt.includes('lighthouse') && metaTxt.includes('seed'), metaTxt);
+const delBox = await page.locator('.lightbox-delete').boundingBox();
+check('lightbox delete button visible on screen', delBox && delBox.y >= 0 && delBox.y + delBox.height <= 900, JSON.stringify(delBox));
 await page.screenshot({ path: SHOTS + '05-assets.png' });
 await page.keyboard.press('Escape');
 

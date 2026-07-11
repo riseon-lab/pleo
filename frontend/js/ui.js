@@ -64,12 +64,14 @@ export function lightbox(src, { metaEl = null, onDelete = null } = {}) {
   const img = h('img', { src, alt: 'asset' });
   const frame = h('div', { class: 'lightbox-frame' },
     h('button', { class: 'lightbox-close', 'aria-label': 'Close', onclick: () => close() }, '✕'),
-    img,
-    metaEl ? h('div', { class: 'lightbox-meta' }, metaEl) : null,
+    // Delete sits OUTSIDE the image, top-left (mirror of the close button),
+    // so long metadata under tall images can never push it off-screen.
     onDelete ? h('button', {
-      class: 'btn danger lightbox-delete',
+      class: 'lightbox-delete', 'aria-label': 'Delete asset',
       onclick: async () => { if (await onDelete()) close(); },
-    }, 'Delete') : null);
+    }, 'Delete') : null,
+    img,
+    metaEl ? h('div', { class: 'lightbox-meta' }, metaEl) : null);
   const overlay = h('div', {
     class: 'overlay lightbox-overlay',
     onclick: (e) => { if (e.target === overlay) close(); },

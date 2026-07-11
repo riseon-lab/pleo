@@ -183,7 +183,7 @@ export async function render(root) {
       if (!loraStack.length) stackList.append(h('p', { class: 'muted' }, 'Nothing imported — add from the library below.'));
       for (const l of loraStack) {
         const check = h('input', { type: 'checkbox', checked: l.enabled, title: 'Active in generations' });
-        const slider = h('input', { type: 'range', min: -2, max: 2, step: 0.05, value: l.strength });
+        const slider = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: Math.max(0, l.strength) });
         const valLabel = h('span', { class: 'mono', style: 'width:48px;text-align:right' }, l.strength.toFixed(2));
         check.onchange = () => { l.enabled = check.checked; persistStack(); };
         slider.oninput = () => { l.strength = +slider.value; valLabel.textContent = l.strength.toFixed(2); persistStack(); };
