@@ -104,6 +104,10 @@ const delBox = await page.locator('.lightbox-delete').boundingBox();
 check('lightbox delete button visible on screen', delBox && delBox.y >= 0 && delBox.y + delBox.height <= 900, JSON.stringify(delBox));
 await page.screenshot({ path: SHOTS + '05-assets.png' });
 await page.keyboard.press('Escape');
+await page.click('.tile-menu');
+check('asset tile ⋮ menu opens with Delete', await page.locator('.tile-pop:not([hidden]) .tile-pop-item:text("Delete")').count() === 1);
+await page.click('h1:text("Assets")'); // click-away closes
+check('tile menu closes on outside click', await page.locator('.tile-pop:not([hidden])').count() === 0);
 
 // ---- models ----
 await page.click('.nav-item[data-path="models"]');

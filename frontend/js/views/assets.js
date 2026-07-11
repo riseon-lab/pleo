@@ -56,10 +56,35 @@ export async function render(root) {
     for (const a of shown) grid.append(tile(a));
   }
 
+  async function deleteAsset(a) {
+    if (!await confirmModal('Delete asset', 'Remove this asset from disk permanently?')) return false;
+    try {
+      await api(`/api/assets/${a.id}`, { method: 'DELETE' });
+      urlCache.delete(a.id);
+      assets = assets.filter(x => x.id !== a.id);
+      draw();
+      toast('Asset deleted', 'success');
+      return true;
+    } catch (e) { toast(e.message, 'error'); return false; }
+  }
+
   function tile(a) {
     const img = h('img', { alt: a.kind, loading: 'lazy' });
-    const el = h('div', { class: 'asset-tile', onclick: () => open(a, img.src) },
-      img, h('span', { class: `badge tag ${a.kind === 'generated' ? 'ok' : ''}` }, a.kind));
+    const pop = h('div', { class: 'tile-pop', hidden: true },
+      h('button', {
+        class: 'tile-pop-item danger', onclick: (e) => { e.stopPropagation(); pop.hidden = true; deleteAsset(a); },
+      }, 'Delete'));
+    const menuBtn = h('button', {
+      class: 'tile-menu', 'aria-label': 'Asset options', onclick: (e) => {
+        e.stopPropagation();
+        const wasHidden = pop.hidden;
+        document.querySelectorAll('.tile-pop').forEach(p => { p.hidden = true; });
+        pop.hidden = !wasHidden;
+      },
+    }, '⋮');
+    const el = h('div', { class: 'asset-tile', onclick: () => { pop.hidden = true; open(a, img.src); } },
+      img, h('span', { class: `badge tag ${a.kind === 'generated' ? 'ok' : ''}` }, a.kind),
+      menuBtn, pop);
     decryptToURL(a).then(url => { img.src = url; }).catch(() => {
       el.classList.add('broken');
       el.append(h('span', { class: 'muted', style: 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center' }, 'decrypt failed'));
@@ -89,17 +114,7 @@ export async function render(root) {
     }
     lightbox(src, {
       metaEl: h('span', { style: 'white-space:pre-wrap' }, metaText),
-      onDelete: async () => {
-        if (!await confirmModal('Delete asset', 'Remove this asset from disk permanently?')) return false;
-        try {
-          await api(`/api/assets/${a.id}`, { method: 'DELETE' });
-          urlCache.delete(a.id);
-          assets = assets.filter(x => x.id !== a.id);
-          draw();
-          toast('Asset deleted', 'success');
-          return true;
-        } catch (e) { toast(e.message, 'error'); return false; }
-      },
+      onDelete: () => deleteAsset(a),
     });
   }
 
@@ -124,6 +139,9 @@ export async function render(root) {
 
   grid.append(spinner('Decrypting assets…'));
   await load();
+  const onDocClick = () => document.querySelectorAll('.tile-pop').forEach(p => { p.hidden = true; });
+  document.addEventListener('click', onDocClick);
+  return () => document.removeEventListener('click', onDocClick);
 }
 
 function bufToB64(buf) {
