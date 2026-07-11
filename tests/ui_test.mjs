@@ -160,6 +160,13 @@ await page.click('.nav-item[data-path="running"]');
 await page.waitForTimeout(400);
 const sideBox = await page.locator('#sidebar').boundingBox();
 check('mobile: nav docks to bottom', sideBox && sideBox.y > 700, JSON.stringify(sideBox));
+const maxRight = () => Math.max(...[...document.querySelectorAll('*')]
+  .filter(el => el.getBoundingClientRect().width > 50)
+  .map(el => el.getBoundingClientRect().right));
+const overflow = await page.evaluate(`(${maxRight})() - window.innerWidth`);
+check('mobile: no element wider than viewport', overflow <= 1, `${Math.round(overflow)}px overflow`);
+const inputPx = await page.locator('textarea[placeholder="Prompt…"]').evaluate(el => getComputedStyle(el).fontSize);
+check('mobile: inputs are 16px (no iOS focus zoom)', inputPx === '16px', inputPx);
 await page.screenshot({ path: SHOTS + '08-mobile.png' });
 
 // ---- data studio ----
@@ -216,6 +223,8 @@ check('loss curve rendered', await page.locator('.loss-chart path').count() >= 1
 check('samples strip present', await page.locator('h3:text("Samples")').count() === 1);
 await page.click('.list-row button:text("Use as LoRA")');
 await page.waitForSelector('.toast-success', { timeout: 10000 });
+const trainOverflow = await page.evaluate(`(${maxRight})() - window.innerWidth`);
+check('mobile: training page fits viewport', trainOverflow <= 1, `${Math.round(trainOverflow)}px overflow`);
 await page.screenshot({ path: SHOTS + '10-training.png' });
 
 // ---- logout -> login roundtrip ----
