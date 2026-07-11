@@ -147,17 +147,18 @@ input, select, textarea { max-width: 100%; }
 .modal-body { padding: 10px 20px 20px; overflow-y: auto; }
 
 /* ---------- lightbox ---------- */
-.lightbox-overlay { background: rgba(10,10,12,.82); padding: 56px 56px 24px; }
+.lightbox-overlay { background: rgba(10,10,12,.82); padding: 64px 24px 24px; }
 .lightbox-frame { position: relative; display: flex; flex-direction: column; align-items: center; max-width: calc(100vw - 96px); }
 .lightbox-frame img {
   max-width: calc(100vw - 112px); max-height: calc(100vh - 200px);
   width: auto; height: auto; border-radius: 6px; display: block; background: #222;
 }
-/* Close button outside the image corner, per spec */
+/* Close/delete live at the SCREEN corners — outside the image, and immune
+   to tall images pushing the frame's top edge above the viewport. */
 .lightbox-close {
-  position: absolute; top: -42px; right: -42px; width: 36px; height: 36px;
+  position: fixed; top: 14px; right: 14px; width: 38px; height: 38px;
   border-radius: 50%; border: 1px solid rgba(255,255,255,.35); background: rgba(17,17,17,.6);
-  color: #fff; font-size: 15px; cursor: pointer; z-index: 2;
+  color: #fff; font-size: 15px; cursor: pointer; z-index: 3;
 }
 .lightbox-close:hover { background: rgba(255,255,255,.18); }
 .lightbox-meta {
@@ -165,8 +166,8 @@ input, select, textarea { max-width: 100%; }
   max-height: 76px; overflow-y: auto;
 }
 .lightbox-delete {
-  position: absolute; top: -42px; left: -42px; z-index: 2;
-  height: 36px; padding: 0 14px; border-radius: 99px;
+  position: fixed; top: 14px; left: 14px; z-index: 3;
+  height: 38px; padding: 0 14px; border-radius: 99px;
   border: 1px solid rgba(255,255,255,.35); background: rgba(198,40,40,.75);
   color: #fff; font: inherit; font-size: 13px; font-weight: 600; cursor: pointer;
 }
@@ -174,8 +175,6 @@ input, select, textarea { max-width: 100%; }
 @media (max-width: 700px) {
   .lightbox-frame { max-width: 100vw; }
   .lightbox-frame img { max-width: calc(100vw - 24px); }
-  .lightbox-close { top: -46px; right: 0; }
-  .lightbox-delete { top: -46px; left: 0; }
 }
 
 /* ---------- running view ---------- */
