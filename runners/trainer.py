@@ -18,6 +18,7 @@ import math
 import os
 import random
 import re
+import signal
 import subprocess
 import sys
 import threading
@@ -198,7 +199,19 @@ def real_train(job: dict) -> None:
                           "git clone https://github.com/ostris/ai-toolkit there")
         return
     cfg_path = build_toolkit_config(job)
-    env = dict(os.environ, HF_HOME=CONFIG["hf_home"])
+    # Unbuffered + faulthandler: when ai-toolkit dies on a signal (e.g. a
+    # SIGSEGV in native code), the pending stdout buffer would otherwise be
+    # lost and train.log would end before the crash site — faulthandler dumps
+    # the Python stack of the crash into the log instead.
+    env = dict(os.environ, HF_HOME=CONFIG["hf_home"],
+               PYTHONUNBUFFERED="1", PYTHONFAULTHANDLER="1")
+    # hf_transfer was removed from huggingface_hub 1.x; RunPod images still
+    # export this, which only produces a FutureWarning in every run.
+    env.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+    # hf_xet's native (Rust) downloader can segfault on some hosts/kernels;
+    # plain HTTP fallback is slower but never takes the trainer down.
+    # Delete this line to re-enable Xet once verified stable on the pod.
+    env.setdefault("HF_HUB_DISABLE_XET", "1")
     # Use the trainer venv's own interpreter, not whatever "python" resolves to.
     proc = subprocess.Popen(
         [sys.executable, "run.py", str(cfg_path)], cwd=AI_TOOLKIT_DIR, env=env,
@@ -244,14 +257,29 @@ def real_train(job: dict) -> None:
     _scan_samples(job)
     log.close()
     _scan_toolkit_outputs(job)
-    STATE["state"] = "done" if proc.returncode == 0 else "error"
-    if proc.returncode != 0:
+    rc = proc.returncode
+    STATE["state"] = "done" if rc == 0 else "error"
+    if rc != 0:
         # Surface the actual failure, not just the exit code: last error-ish
         # lines first, else the raw tail.
         lines = list(tail)
-        errorish = [l for l in lines if re.search(r"error|exception|traceback|failed|not found|no such|oom|out of memory", l, re.I)]
+        errorish = [l for l in lines if re.search(
+            r"error|exception|traceback|fatal|segmentation|segfault|failed|not found|no such|oom|out of memory", l, re.I)]
         excerpt = " | ".join((errorish or lines)[-6:])[:800]
-        STATE["error"] = f"ai-toolkit exited {proc.returncode}: {excerpt or 'no output — open the log'}"
+        if rc < 0:
+            try:
+                signame = signal.Signals(-rc).name
+            except ValueError:
+                signame = f"signal {-rc}"
+            hint = {
+                "SIGSEGV": "segfault in native code — train.log has the faulthandler traceback",
+                "SIGABRT": "aborted by a native library — see train.log",
+                "SIGKILL": "killed — usually the host ran out of RAM",
+            }.get(signame, "")
+            desc = f"ai-toolkit died on {signame}" + (f" ({hint})" if hint else "")
+        else:
+            desc = f"ai-toolkit exited {rc}"
+        STATE["error"] = f"{desc}: {excerpt or 'no output — open the log'}"
 
 
 def _scan_samples(job: dict) -> None:

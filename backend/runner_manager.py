@@ -18,6 +18,7 @@ import httpx
 
 from . import config, events
 from .envmgr import env_status, python_path
+from .proc import runner_env
 from .registry import get_model
 
 _state: dict = {
@@ -77,7 +78,7 @@ async def start_runner(model_id: str) -> None:
         _state["proc"] = subprocess.Popen(
             [python, str(config.ROOT / "runners" / "runner.py"),
              "--port", str(_state["port"]), "--config", str(runner_cfg)],
-            cwd=str(config.ROOT),
+            cwd=str(config.ROOT), env=runner_env(),
         )
         _publish_status()
         try:

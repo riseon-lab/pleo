@@ -2,6 +2,7 @@
 Mirrors the model runner's spawn/health/stop pattern."""
 import asyncio
 import json
+import os
 import subprocess
 import sys
 import time
@@ -22,13 +23,28 @@ def pick_python(component_id: str) -> str:
     return str(python_path(component_id))
 
 
+def runner_env() -> dict:
+    """Env for runner subprocesses (inherited by anything they spawn).
+
+    Unbuffered + faulthandler so a native crash leaves a traceback instead of
+    dying silently with buffered output lost. HF_HUB_ENABLE_HF_TRANSFER was
+    removed from huggingface_hub 1.x (RunPod images still export it, spamming
+    a FutureWarning), and hf_xet's native downloader can segfault on some
+    hosts — plain HTTP fallback is slower but never takes the process down.
+    """
+    env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONFAULTHANDLER="1")
+    env.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
+    env.setdefault("HF_HUB_DISABLE_XET", "1")
+    return env
+
+
 def spawn(script_name: str, cfg: dict, port: int, python: str) -> subprocess.Popen:
     cfg_path = config.TMP_DIR / f"{script_name.replace('.py', '')}-{port}.json"
     cfg_path.write_text(json.dumps(cfg))
     return subprocess.Popen(
         [python, str(config.ROOT / "runners" / script_name),
          "--port", str(port), "--config", str(cfg_path)],
-        cwd=str(config.ROOT),
+        cwd=str(config.ROOT), env=runner_env(),
     )
 
 
