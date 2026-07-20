@@ -212,6 +212,12 @@ def real_train(job: dict) -> None:
     # plain HTTP fallback is slower but never takes the trainer down.
     # Delete this line to re-enable Xet once verified stable on the pod.
     env.setdefault("HF_HUB_DISABLE_XET", "1")
+    # kornia (pulled in via diffusers' anima pipeline during ai-toolkit's
+    # extension discovery) runs torch.jit.script on import, which SIGSEGVs
+    # against the container's torch build. PYTORCH_JIT=0 turns scripting into
+    # a passthrough — same math, no TorchScript compile. LoRA training in
+    # ai-toolkit does not rely on TorchScript.
+    env.setdefault("PYTORCH_JIT", "0")
     # Use the trainer venv's own interpreter, not whatever "python" resolves to.
     proc = subprocess.Popen(
         [sys.executable, "run.py", str(cfg_path)], cwd=AI_TOOLKIT_DIR, env=env,
