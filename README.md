@@ -68,6 +68,15 @@ Model repo ids live in `models.json` — edit freely; no code changes needed.
   manual "save now"; sample images per checkpoint from your prompts; ETA and
   cost from your RunPod $/hr; optional push to HF on completion; checkpoints
   promote straight into the LoRA library.
+- A starting job **stages its dataset** into `data/training/<job_id>/dataset`
+  (hardlinks — free on the same volume). The run reads only that copy, so
+  editing or deleting the dataset in Data Studio mid-run can't break it, and
+  ai-toolkit's latent cache lands in the job dir instead of your dataset.
+  Finished jobs get a **Discard staged data** button (keeps checkpoints,
+  samples and logs); deleting the job removes everything anyway.
+- LoRAs in the library can be **pushed to a Hugging Face repo** from the Local
+  tab (repo id + private toggle; creates the repo if needed). Needs a
+  write-scoped HF token in Settings — sent transiently, never stored server-side.
 
 ## Moderation
 

@@ -252,7 +252,9 @@ function newJobCard(trainable, datasets, meta) {
     h('h3', {}, 'New LoRA training job'),
     h('div', { class: 'grid2' },
       h('label', { class: 'field' }, h('span', {}, 'Job name'), name),
-      h('label', { class: 'field' }, h('span', {}, 'Dataset'), dsSel),
+      h('label', { class: 'field' }, h('span', {}, 'Dataset'), dsSel,
+        h('span', { class: 'muted', style: 'font-size:12px' },
+          'Copied into the job when training starts — editing or deleting it in Data Studio afterwards won’t affect the run')),
       h('label', { class: 'field' }, h('span', {}, 'Base model'), modelSel),
       h('label', { class: 'field' }, h('span', {}, 'Trigger word'),
         h('div', { class: 'row gap' }, trigger, genTrigger))),
@@ -323,6 +325,19 @@ function jobCard(job, refresh) {
     actions.push(h('button', {
       class: 'btn small', onclick: () => pushToHFModal(job),
     }, 'Push to HF'));
+  }
+  const staged = job.dataset_snapshot;
+  if (job.status !== 'running' && staged && !staged.discarded) {
+    actions.push(h('button', {
+      class: 'btn small ghost', onclick: async () => {
+        if (!await confirmModal('Discard staged data',
+          `Delete this job’s ${staged.images} staged training image(s)? Checkpoints, samples and logs are kept. ` +
+          'The copy is hardlinked, so disk is only freed once the dataset is deleted from Data Studio too — ' +
+          'and if it already is, this is the last copy of those images.')) return;
+        try { await api(`/api/training/jobs/${job.id}/staged`, { method: 'DELETE' }); toast('Staged data discarded', 'success'); refresh(); }
+        catch (e) { toast(e.message, 'error'); }
+      },
+    }, `Discard staged data${staged.bytes ? ` (${fmtBytes(staged.bytes)})` : ''}`));
   }
   actions.push(h('button', {
     class: 'btn small ghost', onclick: async () => {

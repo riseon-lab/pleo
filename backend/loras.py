@@ -220,3 +220,47 @@ def hf_download(body: HFDownloadBody):
 def list_downloads():
     with _dl_lock:
         return {"downloads": list(_downloads.values())}
+
+
+# ---------------- Push to Hugging Face ----------------
+
+class LoraPushBody(BaseModel):
+    repo_id: str
+    private: bool = True
+    hf_key: str | None = None  # transient, never persisted
+
+
+def _push_worker(path, repo_id: str, private: bool, key: str) -> None:
+    try:
+        from huggingface_hub import HfApi
+        api = HfApi(token=key)
+        api.create_repo(repo_id, private=private, exist_ok=True, repo_type="model")
+        events.publish({"type": "lora_push", "file": path.name, "status": "uploading",
+                        "repo": repo_id})
+        api.upload_file(path_or_fileobj=str(path), path_in_repo=path.name,
+                        repo_id=repo_id, repo_type="model")
+        events.publish({"type": "lora_push", "file": path.name, "status": "done",
+                        "repo": repo_id})
+    except Exception as e:
+        events.publish({"type": "lora_push", "file": path.name, "status": "error",
+                        "detail": str(e)[:300]})
+
+
+@router.post("/{filename}/push")
+def push_lora(filename: str, body: LoraPushBody):
+    """Upload a local LoRA file to a Hugging Face model repo (created if needed)."""
+    p = config.LORAS_DIR / safe_filename(filename)
+    if not path_inside(config.LORAS_DIR, p) or not p.exists():
+        raise HTTPException(404, "No such LoRA")
+    repo = body.repo_id.strip().strip("/")
+    if not re.fullmatch(r"[\w.-]+/[\w.-]+", repo):
+        raise HTTPException(400, "repo_id must look like user/name")
+    if config.MOCK:
+        events.publish({"type": "lora_push", "file": p.name, "status": "skipped",
+                        "detail": f"mock mode — would upload to {repo}"})
+        return {"ok": True}
+    if not body.hf_key:
+        raise HTTPException(400, "Hugging Face token required — save it in Settings first")
+    threading.Thread(target=_push_worker, args=(p, repo, body.private, body.hf_key),
+                     daemon=True).start()
+    return {"ok": True}

@@ -48,6 +48,7 @@ export async function render(root) {
             e.target.disabled = false;
           },
         }, 'Download'),
+        h('button', { class: 'btn small ghost', onclick: () => pushToHFModal(l) }, 'Push to HF'),
         h('button', {
           class: 'btn small danger', onclick: async () => {
             if (!await confirmModal('Delete LoRA', `Remove ${l.file} from disk?`)) return;
@@ -112,6 +113,38 @@ export async function render(root) {
       btn));
   }
 
+  function pushToHFModal(l) {
+    // Prefill from the sidecar if this LoRA originally came from HF.
+    const repo = h('input', { type: 'text', value: l.source?.kind === 'huggingface' ? l.source.repo : '', placeholder: 'user/my-lora' });
+    const priv = h('input', { type: 'checkbox', checked: true });
+    const go = h('button', {
+      class: 'btn', onclick: async () => {
+        if (!repo.value.trim()) return;
+        go.disabled = true;
+        try {
+          const keys = await getApiKeys();
+          if (!keys.hf_key) {
+            toast('Save a write-scoped Hugging Face token in Settings first', 'error', 6000);
+            go.disabled = false;
+            return;
+          }
+          await api(`/api/loras/${encodeURIComponent(l.file)}/push`, {
+            method: 'POST',
+            body: { repo_id: repo.value.trim(), private: priv.checked, hf_key: keys.hf_key },
+          });
+          toast('Upload started — watch the toasts for progress');
+          m.close();
+        } catch (e) { toast(e.message, 'error'); go.disabled = false; }
+      },
+    }, 'Push LoRA');
+    const m = modal(`Push “${l.label || l.file}” to Hugging Face`, h('div', {},
+      h('p', { class: 'muted' },
+        `Uploads ${l.file} (${fmtBytes(l.size)}) to the repo below, creating it if needed. Uses the HF token from Settings (needs write scope); the token is sent transiently and never stored server-side.`),
+      h('label', { class: 'field' }, h('span', {}, 'Repo'), repo),
+      h('label', { class: 'row gap', style: 'margin-bottom:14px' }, priv, h('span', {}, 'Private repo')),
+      go));
+  }
+
   function pickerModal(items, apiKey) {
     const list = h('div', { class: 'list' });
     for (const it of items) {
@@ -154,6 +187,12 @@ export async function render(root) {
   }
 
   const off = onEvent((ev) => {
+    if (ev.type === 'lora_push') {
+      if (ev.status === 'done') toast(`Pushed ${ev.file} to HF: ${ev.repo}`, 'success', 6000);
+      if (ev.status === 'error') toast(`HF push failed: ${ev.detail}`, 'error', 6000);
+      if (ev.status === 'skipped') toast(ev.detail || 'HF push skipped (mock mode)');
+      return;
+    }
     if (ev.type !== 'lora_download') return;
     active.set(ev.id, ev);
     drawDownloads();

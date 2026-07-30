@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from . import captioner_manager, config, events, proc, runner_manager
 from .auth import AUTHED
+from .datasets import IMAGE_EXTS as DATASET_EXTS
 from .datasets import _items as dataset_items
 from .datasets import _meta as dataset_meta
 from .datasets import images_dir
@@ -213,6 +214,38 @@ def job_dir(job_id: str) -> Path:
     return d
 
 
+def _snapshot_dataset(job_id: str, ds_id: str) -> tuple[Path, int, int]:
+    """Give the job its own copy of the training data under <job_dir>/dataset.
+
+    A run must not depend on the Data Studio dataset staying put: deleting or
+    editing it mid-run (or after latents are cached, when the images *look*
+    disposable) would otherwise break the job — ai-toolkit rebuilds its file
+    list from the folder on every start, cached latents or not.
+
+    Hardlinks make the snapshot free on the same volume; the fallback copy is
+    for filesystems that refuse links. Either way the images stay reachable
+    through the job's own path after the dataset is deleted."""
+    src = images_dir(ds_id)
+    dest = job_dir(job_id) / "dataset"
+    dest.mkdir(parents=True, exist_ok=True)
+    linked = staged_bytes = 0
+    for f in sorted(src.iterdir()) if src.exists() else []:
+        if not f.is_file() or f.suffix.lower() not in DATASET_EXTS:
+            continue
+        for part in (f, f.with_suffix(".txt")):  # image + caption sidecar
+            if not part.exists():
+                continue
+            out = dest / part.name
+            if not out.exists():
+                try:
+                    os.link(part, out)
+                except OSError:
+                    shutil.copyfile(part, out)
+            staged_bytes += out.stat().st_size
+        linked += 1
+    return dest, linked, staged_bytes
+
+
 class HFPush(BaseModel):
     repo_id: str
     private: bool = True
@@ -331,13 +364,24 @@ async def _start_job(job: dict, hf_key: Optional[str]) -> None:
 
         d = job_dir(job["id"])
         d.mkdir(parents=True, exist_ok=True)
+        # Snapshot the data into the job dir so the run owns it from here on.
+        try:
+            snapshot, n_images, n_bytes = await asyncio.to_thread(
+                _snapshot_dataset, job["id"], job["dataset_id"])
+        except OSError as e:
+            _update_job(job["id"], {"status": "error", "error": f"could not stage dataset: {e}"})
+            raise HTTPException(500, f"Could not stage the dataset for training: {e}")
+        if not n_images:
+            _update_job(job["id"], {"status": "error", "error": "dataset had no images at start"})
+            raise HTTPException(400, "Dataset has no images")
+        _update_job(job["id"], {"dataset_snapshot": {"images": n_images, "bytes": n_bytes}})
         cfg = {
             "training_job": job,
             "mock": config.MOCK,
             "mock_sec_per_step": float(os.environ.get("PLEO_MOCK_TRAIN_PACE", "0.03")),
             "hf_home": str(config.HF_CACHE_DIR),
             "job_dir": str(d),
-            "dataset_dir": str(images_dir(job["dataset_id"])),
+            "dataset_dir": str(snapshot),
             "base_model": model,
         }
         p = proc.spawn("trainer.py", cfg, PORT, python)
@@ -488,6 +532,22 @@ def delete_job(job_id: str):
     if d.exists():
         shutil.rmtree(d)
     _save_jobs([j for j in _jobs() if j["id"] != job_id])
+    return {"ok": True}
+
+
+@router.delete("/jobs/{job_id}/staged")
+def discard_staged(job_id: str):
+    """Drop a finished job's staged training images, keeping its checkpoints,
+    samples and logs. Hardlinked, so this only frees disk once the Data Studio
+    dataset is gone too — and if it already is, this was the last copy."""
+    job = _job(job_id)
+    if _live["job_id"] == job_id:
+        raise HTTPException(409, "Cancel the job before discarding its staged data")
+    d = job_dir(job_id) / "dataset"
+    if d.exists():
+        shutil.rmtree(d)
+    snap = dict(job.get("dataset_snapshot") or {})
+    _update_job(job_id, {"dataset_snapshot": {**snap, "bytes": 0, "discarded": True}})
     return {"ok": True}
 
 

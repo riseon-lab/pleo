@@ -221,6 +221,12 @@ while time.time() < deadline:
         break
     time.sleep(1)
 check("lora job completed", stl == "done", str(stl))
+r = c.post("/api/loras/test-lora.safetensors/push", headers=H, json={"repo_id": "bad//repo"})
+check("lora push bad repo id rejected", r.status_code == 400)
+r = c.post("/api/loras/nope.safetensors/push", headers=H, json={"repo_id": "user/repo"})
+check("lora push missing file 404", r.status_code == 404)
+r = c.post("/api/loras/test-lora.safetensors/push", headers=H, json={"repo_id": "user/repo"})
+check("lora push accepted (mock skip)", r.status_code == 200, r.text)
 r = c.delete("/api/loras/test-lora.safetensors", headers=H)
 check("lora delete", r.status_code == 200)
 r = c.post("/api/loras/hf/download", headers=H, json={"repo_id": "bad//repo", "filename": "x.safetensors"})
@@ -365,6 +371,8 @@ r = c.post(f"/api/training/jobs/{tj1}/checkpoint", headers=H)
 check("manual checkpoint accepted", r.status_code == 200, r.text)
 r = c.delete(f"/api/training/jobs/{tj1}", headers=H)
 check("delete running job rejected", r.status_code == 409, r.text)
+r = c.delete(f"/api/training/jobs/{tj1}/staged", headers=H)
+check("discard staged on running job rejected", r.status_code == 409, r.text)
 time.sleep(1.5)
 r = c.post(f"/api/training/jobs/{tj1}/cancel", headers=H)
 check("training cancel accepted", r.status_code == 200, r.text)
@@ -390,6 +398,18 @@ check("optimizer/scheduler/alpha recorded", r.json()["optimizer"] == "prodigy"
       and r.json()["lr_scheduler"] == "cosine" and r.json()["alpha"] == 32, r.text[:300])
 check("vram profile + grad ckpt recorded", r.json()["vram_profile"] == "high"
       and r.json()["gradient_checkpointing"] is False, r.text[:300])
+# The run must own its data: the dataset is staged into the job dir, so
+# deleting it from Data Studio mid-run cannot break training.
+staged = Path("data/training") / tj2 / "dataset"
+check("dataset staged into job dir", staged.is_dir() and len(list(staged.glob("*.png"))) == 2,
+      str(sorted(p.name for p in staged.glob("*")) if staged.is_dir() else "missing"))
+check("staged snapshot count recorded", (r.json().get("dataset_snapshot") or {}).get("images") == 2,
+      str(r.json().get("dataset_snapshot")))
+check("staged captions came along", len(list(staged.glob("*.txt"))) == 2,
+      str(sorted(p.name for p in staged.glob("*.txt"))))
+r = c.delete(f"/api/datasets/{ds_id}", headers=H)
+check("dataset deletable while its job runs", r.status_code == 200, r.text)
+check("staged data survives dataset deletion", len(list(staged.glob("*.png"))) == 2)
 deadline = time.time() + 60
 j2 = None
 while time.time() < deadline:
@@ -408,6 +428,15 @@ check("samples per checkpoint", all(len(ck["samples"]) == 1 for ck in j2["checkp
 sample = j2["checkpoints"][0]["samples"][0]  # job-dir-relative path, e.g. samples/step_000100_0.png
 r = c.get(f"/api/training/jobs/{tj2}/files/{sample}", headers=H)
 check("checkpoint sample is a PNG", r.status_code == 200 and r.content[:4] == b"\x89PNG", str(r.status_code))
+r = c.delete(f"/api/training/jobs/{tj2}/staged", headers=H)
+check("staged data discard", r.status_code == 200, r.text)
+check("staged dir gone after discard", not staged.exists())
+j3 = next(j for j in c.get("/api/training/jobs", headers=H).json()["jobs"] if j["id"] == tj2)
+check("discard flagged on job", (j3.get("dataset_snapshot") or {}).get("discarded") is True
+      and j3["dataset_snapshot"]["bytes"] == 0, str(j3.get("dataset_snapshot")))
+check("checkpoints survive discard", len(j3["checkpoints"]) == 3, str(len(j3["checkpoints"])))
+r = c.delete(f"/api/training/jobs/{tj2}/staged", headers=H)
+check("discard is idempotent", r.status_code == 200, r.text)
 r = c.get(f"/api/training/jobs/{tj2}/files/checkpoints/../../../../account.json", headers=H)
 check("training file traversal rejected", r.status_code in (403, 404), str(r.status_code))
 r = c.post(f"/api/training/jobs/{tj2}/to-loras", headers=H, json={"checkpoint_file": j2["checkpoints"][-1]["file"]})
