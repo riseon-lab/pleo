@@ -64,8 +64,8 @@ Model repo ids live in `models.json` — edit freely; no code changes needed.
   ⚠ Dataset images are plaintext on the volume — training needs raw pixels.
 - **Training**: LoRA jobs on Z Image Base / Qwen Image 2512 via
   [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit) (mock-simulated
-  locally). Checkpoint schedule (default 250/500/750/1000/1500/2000) plus
-  manual "save now"; sample images per checkpoint from your prompts; ETA and
+  locally). Checkpoints every 250, 500, or 1000 steps plus manual "save now";
+  sample images per checkpoint from separate prompt boxes; ETA and
   cost from your RunPod $/hr; optional push to HF on completion; checkpoints
   promote straight into the LoRA library.
 - A starting job **stages its dataset** into `data/training/<job_id>/dataset`

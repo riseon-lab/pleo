@@ -187,17 +187,18 @@ export async function render(root) {
         const valLabel = h('span', { class: 'mono', style: 'width:48px;text-align:right' }, l.strength.toFixed(2));
         check.onchange = () => { l.enabled = check.checked; persistStack(); };
         slider.oninput = () => { l.strength = +slider.value; valLabel.textContent = l.strength.toFixed(2); persistStack(); };
-        stackList.append(h('div', { class: 'list-row' },
+        stackList.append(h('div', { class: 'list-row lora-stack-row' },
           check,
-          h('div', { class: 'grow' }, h('div', {}, l.file)),
-          h('div', { style: 'width:170px' }, slider), valLabel,
-          h('button', {
-            class: 'icon-btn', 'aria-label': `Remove ${l.file} from stack`, onclick: () => {
-              loraStack = loraStack.filter(x => x !== l);
-              persistStack();
-              drawModal();
-            },
-          }, '✕')));
+          h('div', { class: 'grow lora-stack-name' }, l.file),
+          h('div', { class: 'lora-stack-controls' },
+            h('div', { class: 'lora-stack-slider' }, slider), valLabel,
+            h('button', {
+              class: 'icon-btn', 'aria-label': `Remove ${l.file} from stack`, onclick: () => {
+                loraStack = loraStack.filter(x => x !== l);
+                persistStack();
+                drawModal();
+              },
+            }, '✕'))));
       }
       clear(libList);
       const available = loras.filter(lora => !loraStack.some(l => l.file === lora.file));

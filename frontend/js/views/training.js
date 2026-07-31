@@ -144,7 +144,6 @@ function trainerEnvCard() {
 // ---------------- new job form ----------------
 
 function newJobCard(trainable, datasets, meta) {
-  const defaultCheckpoints = meta.default_checkpoints;
   const OPTIMIZERS = meta.optimizers || ['adamw8bit'];
   const SCHEDULERS = meta.lr_schedulers || ['constant'];
   const name = h('input', { type: 'text', placeholder: 'e.g. my-character-v1' });
@@ -181,24 +180,51 @@ function newJobCard(trainable, datasets, meta) {
   dsSel.addEventListener('change', updateSuggestion);
   modelSel.addEventListener('change', updateSuggestion);
   updateSuggestion();
-  const checkpoints = h('input', { type: 'text', value: defaultCheckpoints.join(', ') });
-  const ckptHint = h('span', { class: 'muted' }, '');
-
-  function updateCkptHint() {
-    const total = +steps.value || 0;
-    const sched = checkpoints.value.split(',').map(s => +s.trim())
-      .filter(n => n > 0 && n <= total)
-      .map(n => Math.max(50, Math.round(n / 50) * 50));
-    if (!sched.length) { ckptHint.textContent = ''; return; }
-    const gcd = (a, b) => b ? gcd(b, a % b) : a;
-    const every = Math.max(50, sched.reduce((a, b) => gcd(a, b)));
-    ckptHint.textContent = `Real runs save every ${every} steps (ai-toolkit supports one uniform interval; the final step always saves)`;
-    ckptHint.style.color = every < 250 ? 'var(--danger)' : '';
+  let checkpointEvery = 250;
+  const checkpointOptions = h('div', { class: 'checkpoint-options', role: 'group', 'aria-label': 'Checkpoint save interval' });
+  for (const every of [250, 500, 1000]) {
+    const option = h('button', {
+      type: 'button',
+      class: `checkpoint-option${every === checkpointEvery ? ' selected' : ''}`,
+      'aria-pressed': every === checkpointEvery,
+      onclick: () => {
+        checkpointEvery = every;
+        checkpointOptions.querySelectorAll('.checkpoint-option').forEach(el => {
+          const selected = el === option;
+          el.classList.toggle('selected', selected);
+          el.setAttribute('aria-pressed', selected);
+        });
+      },
+    }, every.toLocaleString());
+    checkpointOptions.append(option);
   }
-  checkpoints.addEventListener('input', updateCkptHint);
-  steps.addEventListener('input', updateCkptHint);
-  updateCkptHint();
-  const samples = h('textarea', { placeholder: 'One sample prompt per line — rendered at every checkpoint', style: 'min-height:60px' });
+  const samplePrompts = h('div', { class: 'sample-prompts' });
+  const addSampleBtn = h('button', {
+    type: 'button', class: 'btn small ghost sample-prompt-add', 'aria-label': 'Add sample prompt',
+    onclick: () => addSamplePrompt(true),
+  }, '+');
+  function addSamplePrompt(focus = false) {
+    if (samplePrompts.children.length >= 4) return;
+    const prompt = h('textarea', { placeholder: `Sample prompt ${samplePrompts.children.length + 1}`, style: 'min-height:60px' });
+    const remove = h('button', {
+      type: 'button', class: 'icon-btn sample-prompt-remove', 'aria-label': 'Remove sample prompt',
+      onclick: () => { row.remove(); syncSamplePrompts(); },
+    }, '✕');
+    const row = h('div', { class: 'sample-prompt-row' }, prompt, remove);
+    samplePrompts.append(row);
+    syncSamplePrompts();
+    if (focus) prompt.focus();
+  }
+  function syncSamplePrompts() {
+    const rows = [...samplePrompts.children];
+    rows.forEach((row, i) => {
+      row.querySelector('textarea').placeholder = `Sample prompt ${i + 1}`;
+      row.querySelector('.sample-prompt-remove').hidden = rows.length <= 2;
+    });
+    addSampleBtn.disabled = rows.length >= 4;
+  }
+  addSamplePrompt();
+  addSamplePrompt();
   const rank = h('input', { type: 'number', min: 1, max: 128, value: 16 });
   const alpha = h('input', { type: 'number', min: 1, max: 256, placeholder: '= rank' });
   const lr = h('input', { type: 'text', value: '1e-4' });
@@ -230,8 +256,10 @@ function newJobCard(trainable, datasets, meta) {
           name: name.value, dataset_id: dsSel.value, base_model: modelSel.value,
           trigger_word: trigger.value,
           steps: +steps.value,
-          checkpoint_steps: checkpoints.value.split(',').map(s => +s.trim()).filter(n => n > 0),
-          sample_prompts: samples.value.split('\n').map(s => s.trim()).filter(Boolean),
+          checkpoint_steps: Array.from(
+            { length: Math.max(1, Math.floor(+steps.value / checkpointEvery)) },
+            (_, i) => Math.min((i + 1) * checkpointEvery, +steps.value)),
+          sample_prompts: [...samplePrompts.querySelectorAll('textarea')].map(el => el.value.trim()).filter(Boolean),
           rank: +rank.value, alpha: alpha.value ? +alpha.value : null,
           lr: +lr.value, lr_scheduler: scheduler.value, optimizer: optimizer.value,
           resolution: +resolution.value, batch_size: +batch.value,
@@ -259,8 +287,14 @@ function newJobCard(trainable, datasets, meta) {
       h('label', { class: 'field' }, h('span', {}, 'Trigger word'),
         h('div', { class: 'row gap' }, trigger, genTrigger))),
     h('label', { class: 'field' }, h('span', {}, 'Total steps'), steps, stepsHint, suggestRow),
-    h('label', { class: 'field' }, h('span', {}, 'Checkpoint saves (steps, comma-separated — manual saves any time)'), checkpoints, ckptHint),
-    h('label', { class: 'field' }, h('span', {}, 'Checkpoint sample prompts'), samples),
+    h('div', { class: 'field' },
+      h('span', {}, 'Save a checkpoint every'), checkpointOptions,
+      h('span', { class: 'muted field-help' }, 'steps · the final step always saves · manual saves are available during a run')),
+    h('div', { class: 'field' },
+      h('div', { class: 'field-title-row' },
+        h('span', {}, 'Checkpoint sample prompts'),
+        addSampleBtn),
+      samplePrompts),
     h('div', { class: 'grid2' },
       h('label', { class: 'field' }, h('span', {}, 'LoRA rank'), rank),
       h('label', { class: 'field' }, h('span', {}, 'LoRA alpha'), alpha),
@@ -437,16 +471,16 @@ function lossChart(history) {
   svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
   svg.setAttribute('class', 'loss-chart');
   svg.innerHTML = `
-    <line x1="${PAD.l}" y1="${Y(yMin)}" x2="${W - PAD.r}" y2="${Y(yMin)}" stroke="#E6E6EB" stroke-width="1"/>
-    <line x1="${PAD.l}" y1="${Y(yMax)}" x2="${W - PAD.r}" y2="${Y(yMax)}" stroke="#E6E6EB" stroke-width="1"/>
+    <line x1="${PAD.l}" y1="${Y(yMin)}" x2="${W - PAD.r}" y2="${Y(yMin)}" stroke="var(--line)" stroke-width="1"/>
+    <line x1="${PAD.l}" y1="${Y(yMax)}" x2="${W - PAD.r}" y2="${Y(yMax)}" stroke="var(--line)" stroke-width="1"/>
     <text x="${W - PAD.r + 6}" y="${Y(yMax) + 4}" class="chart-label">${yMax.toFixed(3)}</text>
     <text x="${W - PAD.r + 6}" y="${Y(yMin) + 4}" class="chart-label">${yMin.toFixed(3)}</text>
-    <path d="${d}" fill="none" stroke="#111111" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
-    <circle cx="${X(last[0])}" cy="${Y(last[1])}" r="3" fill="#111111"/>
+    <path d="${d}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke"/>
+    <circle cx="${X(last[0])}" cy="${Y(last[1])}" r="3" fill="var(--accent)"/>
     <text x="${W - PAD.r + 6}" y="${Math.max(PAD.t + 8, Math.min(H - 4, Y(last[1]) + 4))}" class="chart-label chart-label-strong">${last[1].toFixed(4)}</text>`;
   const hoverDot = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-  hoverDot.setAttribute('r', '3.5'); hoverDot.setAttribute('fill', '#111111');
-  hoverDot.setAttribute('stroke', '#FFFFFF'); hoverDot.setAttribute('stroke-width', '2');
+  hoverDot.setAttribute('r', '3.5'); hoverDot.setAttribute('fill', 'var(--accent)');
+  hoverDot.setAttribute('stroke', 'var(--surface-raised)'); hoverDot.setAttribute('stroke-width', '2');
   hoverDot.style.display = 'none';
   svg.append(hoverDot);
   const tip = h('div', { class: 'chart-tip', hidden: true });

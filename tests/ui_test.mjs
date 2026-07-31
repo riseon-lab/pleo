@@ -206,9 +206,15 @@ await page.screenshot({ path: SHOTS + '09-datastudio.png' });
 await page.click('.nav-item[data-path="training"]');
 await page.waitForSelector('h3:text("New LoRA training job")');
 await page.fill('input[placeholder="e.g. my-character-v1"]', 'ui lora');
-await page.fill('label:has(span:text("Total steps")) input', '200');
-await page.fill('label:has(span:text-matches("Checkpoint saves")) input', '100');
-await page.fill('textarea[placeholder*="sample prompt"]', 'uiword1 test portrait');
+await page.fill('label:has(span:text("Total steps")) input', '500');
+check('checkpoint choices are fixed', (await page.locator('.checkpoint-option').allTextContents()).join(',') === '250,500,1,000');
+await page.click('.checkpoint-option:text-is("500")');
+check('checkpoint choice selects one interval', await page.locator('.checkpoint-option.selected:text-is("500")').count() === 1);
+await page.click('.checkpoint-option:text-is("250")');
+check('two sample prompt boxes shown initially', await page.locator('.sample-prompt-row').count() === 2);
+await page.click('.sample-prompt-add');
+check('plus adds one sample prompt', await page.locator('.sample-prompt-row').count() === 3);
+await page.locator('.sample-prompt-row textarea').first().fill('uiword1 test portrait');
 await page.fill('label:has(span:text-matches("RunPod")) input', '0.60');
 await page.click('button:text("Generate")'); // trigger word generator
 check('trigger word generated', (await page.inputValue('input[placeholder="auto-added to captions"]')).length >= 6);
