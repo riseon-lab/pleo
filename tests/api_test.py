@@ -256,6 +256,13 @@ check("Wan runner releases VRAM process after clip",
       c.get("/api/models", headers=H).json()["runner"]["status"] == "stopped")
 c.delete(f"/api/results/{wan_done['result_id']}", headers=H)
 
+r = c.post("/api/generate", headers=H, json={**wan, "video_tier": "720p", "video_aspect": "9:16"})
+check("Wan accepts portrait framing", r.status_code == 200, r.text)
+portrait_job = r.json()["job"]
+check("Wan portrait uses exact 9:16 720p dimensions", (portrait_job["width"], portrait_job["height"]) == (720, 1280) and
+      portrait_job["video_aspect"] == "9:16", str(portrait_job))
+check("cancel portrait check job", c.post(f"/api/jobs/{portrait_job['id']}/cancel", headers=H).status_code == 200)
+
 r = c.post("/api/generate", headers=H, json={**wan, "ref_image_b64": None})
 check("Wan without source rejected", r.status_code == 400, r.text)
 r = c.post("/api/generate", headers=H, json={**wan, "ref_image_b64": "not base64"})
@@ -274,6 +281,8 @@ check("Wan bounds LoRA stack for VRAM", r.status_code == 400 and "at most 4" in 
 r = c.post("/api/generate", headers=H, json={**wan,
            "loras": [{"file": wan_lora_a.name, "high_strength": 2.1, "low_strength": 0.5}]})
 check("Wan validates per-stage LoRA strengths", r.status_code == 422, r.text)
+r = c.post("/api/generate", headers=H, json={**wan, "video_aspect": "square"})
+check("Wan rejects unsupported framing", r.status_code == 400, r.text)
 wan_lora_a.unlink()
 wan_lora_b.unlink()
 

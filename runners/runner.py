@@ -320,7 +320,7 @@ def _encode_mp4(frames, fps: int, max_bytes: int | None = None) -> bytes:
     first = np.asarray(frames[0].convert("RGB") if hasattr(frames[0], "convert") else frames[0])
     for crf in (18, 24, 30, 36, 42, 48):
         buf = io.BytesIO()
-        container = av.open(buf, mode="w", format="mp4", options={"movflags": "+faststart"})
+        container = av.open(buf, mode="w", format="mp4")
         try:
             stream = container.add_stream("libx264", rate=fps)
             stream.width, stream.height = first.shape[1], first.shape[0]
@@ -359,7 +359,7 @@ def _moderation_sheet(frames) -> bytes:
 
 def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
     import torch
-    from PIL import Image
+    from PIL import Image, ImageOps
 
     pipe = STATE["pipe"]
     active_loras = [lora for lora in params.get("loras", [])
@@ -392,6 +392,8 @@ def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
     torch.cuda.reset_peak_memory_stats()
     pipe.enable_model_cpu_offload()
     source = Image.open(io.BytesIO(base64.b64decode(params["ref_image_b64"]))).convert("RGB")
+    if params.get("video_aspect") == "9:16":
+        source = ImageOps.fit(source, (params["width"], params["height"]), Image.Resampling.LANCZOS)
     try:
         frames = pipe(
             image=source,

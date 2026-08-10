@@ -137,6 +137,10 @@ await page.waitForFunction(() => document.querySelector('.video-output-line')?.t
 check('Wan derives output from source aspect', (await page.locator('.video-output-line').textContent()).includes('624×624'));
 await page.click('.video-tier button:has-text("720p")');
 check('Wan 720p quality tier derives its larger output', (await page.locator('.video-output-line').textContent()).includes('960×960'));
+await page.click('.video-tier button:has-text("Portrait 9:16")');
+check('Wan portrait framing shows its exact centre-cropped output',
+  (await page.locator('.video-output-line').textContent()).includes('720×1280') &&
+  await page.locator('.video-source-drop.portrait').count() === 1);
 await page.fill('textarea[placeholder="Prompt…"]', 'slow cinematic push-in');
 await page.click('button:text("Generate 5s video")');
 await page.waitForSelector('.toast:has-text("Video generation started")');
@@ -159,8 +163,9 @@ const wanSaved = await page.evaluate(async () => {
   const queue = await response.json();
   return queue.history.find(j => j.model_id === 'wan-2.2-i2v-a14b-lightning' && j.status === 'done');
 });
-check('Wan result keeps video MIME, 720p tier, and encrypted asset link',
-  wanSaved?.mime === 'video/mp4' && wanSaved?.video_tier === '720p' && Boolean(wanSaved?.asset_id), JSON.stringify(wanSaved));
+check('Wan result keeps video MIME, 720p portrait framing, and encrypted asset link',
+  wanSaved?.mime === 'video/mp4' && wanSaved?.video_tier === '720p' && wanSaved?.video_aspect === '9:16' &&
+  wanSaved?.width === 720 && wanSaved?.height === 1280 && Boolean(wanSaved?.asset_id), JSON.stringify(wanSaved));
 const storedPrefix = await page.evaluate(async (assetId) => {
   const token = sessionStorage.getItem('pleo-token');
   const response = await fetch(`/api/assets/${assetId}/blob`, { headers: { Authorization: `Bearer ${token}` } });

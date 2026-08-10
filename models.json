@@ -85,6 +85,7 @@
         "height": 480,
         "seed": -1,
         "video_tier": "480p",
+        "video_aspect": "source",
         "num_frames": 81,
         "fps": 16
       },

@@ -24,6 +24,10 @@ const WAN_VIDEO = {
     '480p': { label: '480p', detail: 'Safer · faster', maxArea: 480 * 832 },
     '720p': { label: '720p', detail: 'More detail · higher VRAM', maxArea: 720 * 1280 },
   },
+  aspects: {
+    source: { label: 'Source', detail: 'Keep framing' },
+    '9:16': { label: 'Portrait 9:16', detail: 'Centre crop' },
+  },
 };
 const SOURCE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
 const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
@@ -43,6 +47,7 @@ export async function render(root) {
   let loraStack = normalizeStack(getLoraStack(modelId), model.lora_defaults);
   let refFile = null; // transient plaintext source for edit/I2V models
   let videoTier = params.video_tier || model.defaults?.video_tier || '480p';
+  let videoAspect = params.video_aspect || model.defaults?.video_aspect || 'source';
   let resultObjectURL = null;
   let liveJobId = null;
   let disposed = false;
@@ -122,6 +127,10 @@ export async function render(root) {
       h('button', { class: 'btn ghost small', onclick: chooseSourceAsset }, 'Choose from Assets'),
       videoInput));
 
+  const aspectButtons = h('div', { class: 'video-tier', role: 'group', 'aria-label': 'Video framing' }, Object.entries(WAN_VIDEO.aspects).map(([aspect, item]) =>
+    h('button', { onclick: () => { videoAspect = aspect; renderVideoAspect(); persist(); syncAspect(); } },
+      h('strong', {}, item.label), h('small', {}, item.detail))));
+  const videoAspectField = h('div', { class: 'field' }, h('span', {}, 'Framing'), aspectButtons);
   const tierButtons = h('div', { class: 'video-tier' }, Object.entries(WAN_VIDEO.tiers).map(([tier, item]) =>
     h('button', { onclick: () => { videoTier = tier; renderVideoTier(); persist(); syncAspect(); } },
       h('strong', {}, item.label), h('small', {}, item.detail))));
@@ -131,7 +140,7 @@ export async function render(root) {
     h('div', { class: 'row between' }, h('strong', {}, 'LightX2V 720p distilled experts'), h('span', { class: 'badge ok' }, 'baked')),
     h('p', {}, '2026 high-noise + low-noise quality checkpoints'),
     h('p', {}, 'CFG 1 / 1 · 4 steps · 81 frames · 16 fps · ~5 sec'));
-  const wanControls = h('div', { hidden: true }, videoSourceField, videoTierField, videoOutputLine, wanInfo);
+  const wanControls = h('div', { hidden: true }, videoSourceField, videoAspectField, videoTierField, videoOutputLine, wanInfo);
 
   const loraSummary = h('div', { class: 'lora-chiprow' });
   const loraBtn = h('button', { class: 'btn ghost small', onclick: openLoraModal }, 'Manage LoRAs');
@@ -202,6 +211,7 @@ export async function render(root) {
       steps: +steps.value, cfg: +cfg.value, seed: +seed.value,
       width: +width.value, height: +height.value,
       video_tier: videoTier,
+      video_aspect: videoAspect,
     });
   }
 
@@ -215,6 +225,7 @@ export async function render(root) {
     width.value = params.width ?? 1024;
     height.value = params.height ?? 1024;
     videoTier = params.video_tier || model.defaults?.video_tier || '480p';
+    videoAspect = params.video_aspect || model.defaults?.video_aspect || 'source';
     const p = PRESETS.find(p => p.w === +width.value && p.h === +height.value);
     presetSel.value = p ? p.label : 'custom';
     wanControls.hidden = !isVideo;
@@ -232,6 +243,7 @@ export async function render(root) {
       ? 'Your video appears here. The start frame stays visible while Wan works.'
       : 'Generations appear here. Live noise previews stream in step by step.';
     renderVideoTier();
+    renderVideoAspect();
     renderVideoSource();
     renderLoraSummary();
     syncAspect();
@@ -239,17 +251,28 @@ export async function render(root) {
 
   function syncAspect() {
     if (model.kind === 'img2video') {
-      previewBox.style.aspectRatio = refFile?.width && refFile?.height
+      previewBox.style.aspectRatio = videoAspect === '9:16' ? '9 / 16' : refFile?.width && refFile?.height
         ? `${refFile.width} / ${refFile.height}` : '16 / 9';
     } else {
       previewBox.style.aspectRatio = `${+width.value || 16} / ${+height.value || 9}`;
     }
+    previewImg.style.objectFit = model.kind === 'img2video' && videoAspect === '9:16' ? 'cover' : 'contain';
   }
 
   function renderVideoTier() {
     [...tierButtons.children].forEach((button, i) => {
       button.classList.toggle('selected', Object.keys(WAN_VIDEO.tiers)[i] === videoTier);
     });
+    renderVideoSource();
+  }
+
+  function renderVideoAspect() {
+    [...aspectButtons.children].forEach((button, i) => {
+      const selected = Object.keys(WAN_VIDEO.aspects)[i] === videoAspect;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', selected);
+    });
+    videoSourceDrop.classList.toggle('portrait', videoAspect === '9:16');
     renderVideoSource();
   }
 
@@ -260,23 +283,29 @@ export async function render(root) {
     if (ready) videoSourceImg.src = refFile.url;
     if (!refFile) {
       videoSourceMeta.textContent = 'JPG, PNG or WebP';
-      videoOutputLine.textContent = 'Output follows the start image aspect ratio.';
+      videoOutputLine.textContent = videoAspect === '9:16'
+        ? `${videoTier} tier · portrait 9:16 · centre crop`
+        : 'Output follows the start image aspect ratio.';
       return;
     }
     const size = wanOutputSize();
     videoSourceMeta.textContent = `${refFile.name}${refFile.width ? ` · ${refFile.width}×${refFile.height}` : ''}`;
     videoOutputLine.textContent = size
-      ? `${videoTier} tier · ${size.width}×${size.height} output · source aspect preserved`
+      ? `${videoTier} tier · ${size.width}×${size.height} output · ${videoAspect === '9:16' ? 'portrait centre crop' : 'source aspect preserved'}`
       : `${videoTier} tier · source aspect preserved`;
   }
 
   function wanOutputSize() {
-    if (!refFile?.width || !refFile?.height) return null;
-    return wanOutputSizeFor(refFile.width, refFile.height);
+    if (videoAspect !== '9:16' && (!refFile?.width || !refFile?.height)) return null;
+    return wanOutputSizeFor(refFile?.width || 9, refFile?.height || 16);
   }
 
   function wanOutputSizeFor(sourceWidth, sourceHeight) {
     const area = (WAN_VIDEO.tiers[videoTier] || WAN_VIDEO.tiers['480p']).maxArea;
+    if (videoAspect === '9:16') {
+      const unit = Math.floor(Math.sqrt(area / (9 * 16)) / 16) * 16;
+      return { width: 9 * unit, height: 16 * unit };
+    }
     const ratio = sourceHeight / sourceWidth;
     const height = Math.floor(Math.round(Math.sqrt(area * ratio)) / 16) * 16;
     const width = Math.floor(Math.round(Math.sqrt(area / ratio)) / 16) * 16;
@@ -498,6 +527,7 @@ export async function render(root) {
         })),
         ref_image_b64: refFile.b64,
         video_tier: videoTier,
+        video_aspect: videoAspect,
         num_frames: WAN_VIDEO.numFrames,
         fps: WAN_VIDEO.fps,
       } : {

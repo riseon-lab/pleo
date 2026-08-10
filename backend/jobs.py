@@ -46,6 +46,7 @@ class GenerateBody(BaseModel):
     loras: list[LoraRef] = Field(default_factory=list)
     ref_image_b64: Optional[str] = None  # plaintext, transient, for edit/I2V models
     video_tier: Optional[str] = None
+    video_aspect: Optional[str] = None
     num_frames: Optional[int] = Field(None, ge=1, le=81)
     fps: Optional[int] = Field(None, ge=1, le=60)
 
@@ -53,7 +54,7 @@ class GenerateBody(BaseModel):
 def _public_job(job: dict) -> dict:
     return {k: job[k] for k in
             ("id", "model_id", "status", "created", "prompt", "steps", "width", "height", "seed",
-             "error", "result_id", "asset_id", "mime", "video_tier", "num_frames", "fps")
+             "error", "result_id", "asset_id", "mime", "video_tier", "video_aspect", "num_frames", "fps")
             if k in job}
 
 
@@ -115,10 +116,17 @@ async def submit(body: GenerateBody):
             video_tier = body.video_tier or model["defaults"]["video_tier"]
             if video_tier not in tiers:
                 raise HTTPException(400, f"video_tier must be one of: {', '.join(tiers)}")
-            aspect = source_height / source_width
+            video_aspect = body.video_aspect or model["defaults"].get("video_aspect", "source")
+            if video_aspect not in ("source", "9:16"):
+                raise HTTPException(400, "video_aspect must be source or 9:16")
             area = tiers[video_tier]
-            height = round(math.sqrt(area * aspect)) // mult * mult
-            width = round(math.sqrt(area / aspect)) // mult * mult
+            if video_aspect == "9:16":
+                unit = int(math.sqrt(area / (9 * 16))) // mult * mult
+                width, height = 9 * unit, 16 * unit
+            else:
+                aspect = source_height / source_width
+                height = round(math.sqrt(area * aspect)) // mult * mult
+                width = round(math.sqrt(area / aspect)) // mult * mult
             if min(width, height) < 64 or max(width, height) > 2048:
                 raise HTTPException(400, "Reference image aspect ratio is too extreme for Wan video")
         if moderation.is_enabled():
@@ -144,6 +152,7 @@ async def submit(body: GenerateBody):
     if is_video:
         job.update({
             "video_tier": video_tier,
+            "video_aspect": video_aspect,
             "num_frames": defaults["num_frames"],
             "fps": defaults["fps"],
             "mime": model["output_mime"],
@@ -200,7 +209,7 @@ async def _worker() -> None:
                 params["ref_image_b64"] = base64.b64encode(job["ref_bytes"]).decode()
             if model["kind"] == "img2video":
                 params.update({"num_frames": job["num_frames"], "fps": job["fps"],
-                               "video_tier": job["video_tier"]})
+                               "video_tier": job["video_tier"], "video_aspect": job["video_aspect"]})
             final = await runner_manager.generate(params, on_step)
 
             if final.get("type") == "done":
@@ -232,6 +241,7 @@ async def _worker() -> None:
                 if mime == "video/mp4":
                     meta.update({"fps": job["fps"], "num_frames": job["num_frames"],
                                  "video_tier": job["video_tier"],
+                                 "video_aspect": job["video_aspect"],
                                  "distilled_profile": model["distilled_experts"]["name"],
                                  "lora_strengths": [
                                      {"high": lora["high_strength"], "low": lora["low_strength"]}
