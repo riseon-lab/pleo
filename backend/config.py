@@ -37,6 +37,8 @@ MOCK = os.environ.get("PLEO_MOCK", "1" if sys.platform != "linux" else "0") == "
 
 SESSION_TTL_SECONDS = 24 * 3600
 OUTBOX_TTL_SECONDS = 15 * 60
+MAX_IMAGE_ASSET_BYTES = 64 * 1024 * 1024
+MAX_VIDEO_ASSET_BYTES = 128 * 1024 * 1024
 
 def ensure_dirs() -> None:
     for d in (DATA_DIR, ASSETS_DIR, LORAS_DIR, ENVS_DIR, HF_CACHE_DIR, MODERATION_DIR, TMP_DIR):

@@ -69,6 +69,57 @@
       },
       "notes": "Image editing model. Requires a reference image.",
       "dim_multiple": 16
+    },
+    {
+      "id": "wan-2.2-i2v-a14b-lightning",
+      "name": "Wan 2.2 I2V A14B · LightX2V 2026 Quality",
+      "family": "wan2.2-i2v",
+      "kind": "img2video",
+      "repo_id": "Wan-AI/Wan2.2-I2V-A14B-Diffusers",
+      "revision": "596658fd9ca6b7b71d5057529bbf319ecbc61d74",
+      "reqs": "wan-2.2.txt",
+      "defaults": {
+        "steps": 4,
+        "cfg": 1.0,
+        "width": 832,
+        "height": 480,
+        "seed": -1,
+        "video_tier": "480p",
+        "num_frames": 81,
+        "fps": 16
+      },
+      "video": {
+        "tiers": {
+          "480p": 399360,
+          "720p": 921600
+        },
+        "denoising_step_indices": [1000.0, 750.0, 500.0, 250.0],
+        "timesteps": [1000.0, 937.5001, 833.3333, 625.0],
+        "sample_shift": 5.0,
+        "boundary": 0.9,
+        "boundary_step_index": 2,
+        "guidance_high": 1.0,
+        "guidance_low": 1.0
+      },
+      "distilled_experts": {
+        "name": "LightX2V 4-step 720p 2026-04-12",
+        "repo_id": "lightx2v/Wan2.2-Distill-Models",
+        "revision": "db93455b9e85c4d8a3ff9297fcfa189d213cfe29",
+        "high_noise_file": "wan2.2_i2v_A14b_high_noise_lightx2v_4step_720p_260412.safetensors",
+        "high_noise_sha256": "35f4431471b4b9e592e9941c1f5f2fd1e1bf26e1401c84adfe01dd22b5b2b864",
+        "low_noise_file": "wan2.2_i2v_A14b_low_noise_lightx2v_4step_720p_260412.safetensors",
+        "low_noise_sha256": "902847fc52a3d30f676915d2aeb84fc13c4df92bf6a7943beee669ac34ce3c15"
+      },
+      "lora_defaults": {
+        "high_strength": 0.7,
+        "low_strength": 0.5,
+        "max_stack": 4
+      },
+      "output_mime": "video/mp4",
+      "release_vram_after_generate": true,
+      "min_cuda_memory_gb": 80,
+      "notes": "Wan 2.2 image-to-video using LightX2V's newer full 720p high/low distilled experts for maximum quality. Fixed 4-step CFG 1/1 schedule; 81 frames at 16 fps. CPU offload and per-clip runner teardown target 90 GB VRAM safely.",
+      "dim_multiple": 16
     }
   ],
   "components": {

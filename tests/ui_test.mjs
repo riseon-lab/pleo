@@ -68,8 +68,8 @@ await page.waitForSelector('#cancel-btn:not([hidden])', { timeout: 15000 });
 check('cancel button appears while running', true);
 await page.waitForSelector('.preview-box img:not([hidden])', { timeout: 20000 });
 await page.screenshot({ path: SHOTS + '02-generating.png' });
-await page.waitForSelector('.toast-success', { timeout: 60000 });
-const toastText = await page.locator('.toast-success').first().textContent();
+await page.waitForSelector('.toast-success:has-text("Saved to assets")', { timeout: 60000 });
+const toastText = await page.locator('.toast-success:has-text("Saved to assets")').first().textContent();
 check('generated image auto-saved encrypted', toastText.includes('Saved to assets'), toastText);
 await page.waitForTimeout(500);
 await page.screenshot({ path: SHOTS + '03-done.png' });
@@ -113,10 +113,66 @@ check('tile menu closes on outside click', await page.locator('.tile-pop:not([hi
 await page.click('.nav-item[data-path="models"]');
 await page.waitForSelector('.model-card');
 const cards = await page.locator('.model-card').count();
-check('4 model cards', cards === 4, String(cards));
+check('5 model cards', cards === 5, String(cards));
 const chips = await page.locator('.model-card .badge').allTextContents();
 check('mock mode badges shown', chips.some(c => c.includes('mock')), chips.join(','));
 await page.screenshot({ path: SHOTS + '06-models.png' });
+
+// ---- Wan image-to-video controls + encrypted MP4 result ----
+await page.click('.nav-item[data-path="running"]');
+await page.selectOption('label:has(span:text("Model")) select', 'wan-2.2-i2v-a14b-lightning');
+check('Wan quality profile shown', await page.locator('.wan-baked:visible').textContent()
+  .then(t => t.includes('CFG 1 / 1') && t.includes('81 frames')));
+check('Wan hides incompatible freeform controls',
+  await page.locator('label:has(span:text("Negative prompt")):visible, label:has(span:text-is("Resolution")):visible, .grid2:has(span:text("Steps")):visible, .grid2:has(span:text("Width")):visible').count() === 0);
+await page.locator('.video-source-actions input[type=file]').setInputFiles({
+  name: 'start.gif', mimeType: 'image/gif', buffer: tinyPng(1),
+});
+await page.waitForSelector('.toast-error:has-text("JPG, PNG or WebP")');
+check('Wan rejects unsupported start-image formats before upload', await page.locator('.video-source-empty:visible').count() === 1);
+await page.locator('.video-source-actions input[type=file]').setInputFiles({
+  name: 'start.png', mimeType: 'image/png', buffer: tinyPng(2),
+});
+await page.waitForFunction(() => document.querySelector('.video-output-line')?.textContent.includes('624×624'));
+check('Wan derives output from source aspect', (await page.locator('.video-output-line').textContent()).includes('624×624'));
+await page.click('.video-tier button:has-text("720p")');
+check('Wan 720p quality tier derives its larger output', (await page.locator('.video-output-line').textContent()).includes('960×960'));
+await page.fill('textarea[placeholder="Prompt…"]', 'slow cinematic push-in');
+await page.click('button:text("Generate 5s video")');
+await page.waitForSelector('.toast:has-text("Video generation started")');
+await page.click('.nav-item[data-path="models"]');
+await page.waitForFunction(async () => {
+  const token = sessionStorage.getItem('pleo-token');
+  const response = await fetch('/api/queue', { headers: { Authorization: `Bearer ${token}` } });
+  const queue = await response.json();
+  return queue.history.some(j => j.model_id === 'wan-2.2-i2v-a14b-lightning' && j.status === 'done' && j.result_id && !j.asset_id);
+}, { timeout: 60000 });
+await page.click('.nav-item[data-path="running"]');
+await page.waitForSelector('.toast-success:has-text("Saved to assets")', { timeout: 20000 });
+await page.waitForSelector('.preview-box video:not([hidden])', { timeout: 10000 });
+await page.waitForFunction(() => document.querySelector('.preview-box video')?.readyState >= 1);
+check('completed Wan result resumes after navigation and decodes as video',
+  (await page.locator('.preview-box video').getAttribute('src')).startsWith('blob:'));
+const wanSaved = await page.evaluate(async () => {
+  const token = sessionStorage.getItem('pleo-token');
+  const response = await fetch('/api/queue', { headers: { Authorization: `Bearer ${token}` } });
+  const queue = await response.json();
+  return queue.history.find(j => j.model_id === 'wan-2.2-i2v-a14b-lightning' && j.status === 'done');
+});
+check('Wan result keeps video MIME, 720p tier, and encrypted asset link',
+  wanSaved?.mime === 'video/mp4' && wanSaved?.video_tier === '720p' && Boolean(wanSaved?.asset_id), JSON.stringify(wanSaved));
+const storedPrefix = await page.evaluate(async (assetId) => {
+  const token = sessionStorage.getItem('pleo-token');
+  const response = await fetch(`/api/assets/${assetId}/blob`, { headers: { Authorization: `Bearer ${token}` } });
+  const bytes = new Uint8Array(await response.arrayBuffer());
+  return String.fromCharCode(...bytes.slice(4, 8));
+}, wanSaved.asset_id);
+check('saved MP4 is ciphertext on the server', storedPrefix !== 'ftyp', storedPrefix);
+await page.selectOption('label:has(span:text("Model")) select', 'z-image-base');
+
+await page.click('.nav-item[data-path="assets"]');
+await page.waitForFunction(() => document.querySelector('.asset-tile video')?.readyState >= 1, { timeout: 15000 });
+check('encrypted MP4 decrypts and remains playable in Assets', await page.locator('.asset-tile video').count() === 1);
 
 // ---- loras ----
 await page.click('.nav-item[data-path="loras"]');

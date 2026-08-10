@@ -1,5 +1,6 @@
 """Models page API: weight download (HF snapshot), status, launch/stop,
 delete weights."""
+import fnmatch
 import threading
 
 from fastapi import APIRouter, HTTPException
@@ -16,13 +17,57 @@ _downloads: dict[str, dict] = {}  # model_id -> {status, progress, detail}
 _dl_lock = threading.Lock()
 
 
+def _sources(model: dict) -> list[dict]:
+    sources = [{"repo_id": model["repo_id"], "revision": model.get("revision")}]
+    if experts := model.get("distilled_experts"):
+        # The distilled files replace both base DiTs; do not download another
+        # ~114 GB of transformer weights, but retain their Diffusers configs.
+        sources[0].update({
+            "ignore": [
+                "transformer/diffusion_pytorch_model*.safetensors",
+                "transformer_2/diffusion_pytorch_model*.safetensors",
+            ],
+            "required": [
+                "model_index.json", "scheduler/scheduler_config.json",
+                "text_encoder/config.json", "text_encoder/model-00001-of-00003.safetensors",
+                "text_encoder/model-00002-of-00003.safetensors",
+                "text_encoder/model-00003-of-00003.safetensors",
+                "text_encoder/model.safetensors.index.json",
+                "tokenizer/spiece.model", "tokenizer/tokenizer.json", "tokenizer/tokenizer_config.json",
+                "transformer/config.json", "transformer_2/config.json",
+                "vae/config.json", "vae/diffusion_pytorch_model.safetensors",
+            ],
+        })
+        sources.append({
+            "repo_id": experts["repo_id"],
+            "revision": experts.get("revision"),
+            "files": [experts["high_noise_file"], experts["low_noise_file"]],
+        })
+    return sources
+
+
+def _source_ready(source: dict) -> bool:
+    snapshots = runner_manager.hub_cache_dir_for(source["repo_id"]) / "snapshots"
+    if not snapshots.exists():
+        return False
+    revision = source.get("revision")
+    dirs = [snapshots / revision] if revision else [p for p in snapshots.iterdir() if p.is_dir()]
+    files = source.get("required", source.get("files", []))
+    return any(all((d / f).is_file() for f in files) for d in dirs)
+
+
+def _wanted(source: dict, filename: str) -> bool:
+    files = source.get("files")
+    return ((not files or any(fnmatch.fnmatch(filename, pattern) for pattern in files))
+            and not any(fnmatch.fnmatch(filename, pattern) for pattern in source.get("ignore", [])))
+
+
 def _weights_status(model: dict) -> str:
     with _dl_lock:
         dl = _downloads.get(model["id"])
     if dl and dl["status"] == "downloading":
         return "downloading"
-    d = runner_manager.hub_cache_dir_for(model["repo_id"])
-    if (d / "snapshots").exists() and any((d / "snapshots").iterdir()):
+    if all(_source_ready(source) for source in _sources(model)):
         return "downloaded"
     return "none"
 
@@ -35,7 +80,7 @@ def list_models():
         with _dl_lock:
             dl = _downloads.get(m["id"], {})
         out.append({
-            **{k: m.get(k) for k in ("id", "name", "family", "kind", "repo_id", "defaults", "notes", "trainable", "dim_multiple")},
+            **{k: m.get(k) for k in ("id", "name", "family", "kind", "repo_id", "defaults", "notes", "trainable", "dim_multiple", "video", "distilled_experts", "lora_defaults", "output_mime")},
             "weights": _weights_status(m),
             "download": {k: dl.get(k) for k in ("progress", "detail")} if dl else None,
             "env": env_status(m["id"])["status"] if not config.MOCK else "mock",
@@ -54,11 +99,15 @@ def _download_worker(model: dict, token: str | None) -> None:
     try:
         from huggingface_hub import snapshot_download
         events.publish({"type": "model_download", "model_id": model_id, "status": "downloading", "progress": 0})
-        snapshot_download(
-            model["repo_id"],
-            cache_dir=str(config.HF_CACHE_DIR / "hub"),
-            token=token or None,
-        )
+        for source in _sources(model):
+            snapshot_download(
+                source["repo_id"],
+                revision=source.get("revision"),
+                allow_patterns=source.get("files"),
+                ignore_patterns=source.get("ignore"),
+                cache_dir=str(config.HF_CACHE_DIR / "hub"),
+                token=token or None,
+            )
         with _dl_lock:
             _downloads.pop(model_id, None)
         events.publish({"type": "model_download", "model_id": model_id, "status": "done", "progress": 100})
@@ -75,20 +124,29 @@ def _poll_progress(model: dict) -> None:
     total = None
     try:
         from huggingface_hub import HfApi
-        info = HfApi().model_info(model["repo_id"], files_metadata=True)
-        total = sum(f.size or 0 for f in info.siblings) or None
+        total = 0
+        for source in _sources(model):
+            info = HfApi().model_info(source["repo_id"], revision=source.get("revision"), files_metadata=True)
+            total += sum(f.size or 0 for f in info.siblings if _wanted(source, f.rfilename))
+        total = total or None
     except Exception:
         pass
-    d = runner_manager.hub_cache_dir_for(model["repo_id"])
     while True:
         with _dl_lock:
             dl = _downloads.get(model_id)
             if not dl or dl["status"] != "downloading":
                 return
         size = 0
-        if d.exists():
-            size = sum(f.stat().st_size for f in d.rglob("*") if f.is_file())
-        progress = round(size / total * 100, 1) if total else None
+        for source in _sources(model):
+            snapshots = runner_manager.hub_cache_dir_for(source["repo_id"]) / "snapshots"
+            if snapshots.exists():
+                revision = source.get("revision")
+                dirs = [snapshots / revision] if revision else [p for p in snapshots.iterdir() if p.is_dir()]
+                for directory in dirs:
+                    if directory.is_dir():
+                        size += sum(f.stat().st_size for f in directory.rglob("*")
+                                    if f.is_file() and _wanted(source, f.relative_to(directory).as_posix()))
+        progress = min(100, round(size / total * 100, 1)) if total else None
         with _dl_lock:
             if model_id in _downloads:
                 _downloads[model_id]["progress"] = progress
@@ -127,9 +185,13 @@ async def stop():
 
 
 @router.delete("/{model_id}/weights")
-def delete_weights(model_id: str):
-    try:
-        removed = runner_manager.delete_weights(model_id)
-    except RuntimeError as e:
-        raise HTTPException(409, str(e))
+async def delete_weights(model_id: str):
+    get_model(model_id)
+    with _dl_lock:
+        if _downloads.get(model_id, {}).get("status") == "downloading":
+            raise HTTPException(409, "Stop the download before deleting its weights")
+        try:
+            removed = await runner_manager.delete_weights(model_id)
+        except RuntimeError as e:
+            raise HTTPException(409, str(e))
     return {"ok": True, "removed": removed}

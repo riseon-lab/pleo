@@ -1,6 +1,6 @@
 """Encrypted asset store.
 
-The browser encrypts every blob (generated image, reference image) and its
+The browser encrypts every blob (generated media, reference image) and its
 metadata with the user's key before upload. The server only ever sees and
 stores opaque ciphertext. The plaintext index holds nothing sensitive:
 ids, sizes, timestamps, and a kind tag for filtering.
@@ -17,9 +17,6 @@ from .auth import AUTHED
 from .util import atomic_write_json, new_id, path_inside, read_json
 
 router = APIRouter(prefix="/api/assets", tags=["assets"], dependencies=[AUTHED])
-
-MAX_ASSET_BYTES = 64 * 1024 * 1024
-
 
 def _index() -> list[dict]:
     return read_json(config.ASSET_INDEX_FILE, [])
@@ -49,25 +46,35 @@ async def upload_asset(request: Request):
     if kind not in ("generated", "reference"):
         raise HTTPException(400, "kind must be 'generated' or 'reference'")
     enc_meta = request.headers.get("x-pleo-meta", "")
+    mime = request.headers.get("x-pleo-mime", "image/png")
+    if mime not in ("image/png", "image/jpeg", "image/webp", "video/mp4"):
+        raise HTTPException(400, "unsupported media type")
+    max_bytes = config.MAX_VIDEO_ASSET_BYTES if mime == "video/mp4" else config.MAX_IMAGE_ASSET_BYTES
     if len(enc_meta) > 256 * 1024:
         raise HTTPException(413, "metadata too large")
-    body = b""
-    async for chunk in request.stream():
-        body += chunk
-        if len(body) > MAX_ASSET_BYTES:
-            raise HTTPException(413, "asset too large")
-    if not body:
-        raise HTTPException(400, "empty body")
     asset_id = new_id()
     path = _blob_path(asset_id)
     tmp = path.with_suffix(".tmp")
-    tmp.write_bytes(body)
-    os.replace(tmp, path)
+    size = 0
+    try:
+        with tmp.open("wb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > max_bytes:
+                    raise HTTPException(413, "asset too large")
+                out.write(chunk)
+        if not size:
+            raise HTTPException(400, "empty body")
+        os.replace(tmp, path)
+    except Exception:
+        tmp.unlink(missing_ok=True)
+        raise
     items = _index()
     entry = {
         "id": asset_id,
         "kind": kind,
-        "size": len(body),
+        "size": size,
+        "mime": mime,
         "created": time.time(),
         "enc_meta": enc_meta,
     }

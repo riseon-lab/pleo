@@ -1,7 +1,7 @@
 """Lifecycle of the single active model-runner subprocess, plus the result
 outbox.
 
-Generated images are NOT written to disk by the server. The final image goes
+Generated media is NOT written to disk by the server. The final artifact goes
 into an in-memory outbox; the browser fetches it, encrypts it with the user's
 key, and uploads it as an encrypted asset. Outbox entries expire after
 OUTBOX_TTL_SECONDS if never collected.
@@ -72,6 +72,8 @@ async def start_runner(model_id: str) -> None:
             "mock": config.MOCK,
             "hf_home": str(config.HF_CACHE_DIR),
             "loras_dir": str(config.LORAS_DIR),
+            # Leave ample room for the browser's encryption envelope.
+            "max_output_bytes": config.MAX_VIDEO_ASSET_BYTES - 1024 * 1024,
         }))
         _state["status"] = "starting"
         _state["model_id"] = model_id
@@ -148,7 +150,7 @@ async def cancel_generation() -> None:
 
 async def generate(params: dict, on_step: Callable[[dict], None]) -> dict:
     """Stream a generation from the runner. Returns the final NDJSON event
-    ({type: done, image_b64, seed} or {type: error|cancelled, ...})."""
+    ({type: done, media_b64, mime, seed} or {type: error|cancelled, ...})."""
     _state["status"] = "busy"
     _publish_status()
     final: dict = {"type": "error", "error": "runner stream ended unexpectedly"}
@@ -177,9 +179,9 @@ async def generate(params: dict, on_step: Callable[[dict], None]) -> dict:
 
 # ---------------- Outbox ----------------
 
-def outbox_put(result_id: str, image: bytes, meta: dict) -> None:
+def outbox_put(result_id: str, media: bytes, meta: dict, mime: str = "image/png") -> None:
     _gc_outbox()
-    _outbox[result_id] = {"bytes": image, "meta": meta, "created": time.time()}
+    _outbox[result_id] = {"bytes": media, "meta": meta, "mime": mime, "created": time.time()}
 
 
 def outbox_get(result_id: str) -> Optional[dict]:
@@ -203,12 +205,23 @@ def hub_cache_dir_for(repo_id: str):
     return config.HF_CACHE_DIR / "hub" / ("models--" + repo_id.replace("/", "--"))
 
 
-def delete_weights(model_id: str) -> bool:
-    model = get_model(model_id)
-    if _state["model_id"] == model_id and _state["status"] in ("loading", "ready", "busy"):
-        raise RuntimeError("Stop the runner before deleting its weights")
-    d = hub_cache_dir_for(model["repo_id"])
-    if d.exists():
-        shutil.rmtree(d)
-        return True
-    return False
+async def delete_weights(model_id: str) -> bool:
+    async with _lock:
+        model = get_model(model_id)
+        status = runner_status()
+        if status["model_id"] == model_id and status["status"] != "stopped":
+            raise RuntimeError("Stop the runner before deleting its weights")
+        repos = [model["repo_id"]]
+        if model.get("distilled_experts"):
+            repos.append(model["distilled_experts"]["repo_id"])
+
+        def remove() -> bool:
+            removed = False
+            for repo_id in repos:
+                d = hub_cache_dir_for(repo_id)
+                if d.exists():
+                    shutil.rmtree(d)
+                    removed = True
+            return removed
+
+        return await asyncio.to_thread(remove)

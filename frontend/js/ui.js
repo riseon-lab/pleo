@@ -58,10 +58,11 @@ export function confirmModal(title, message, confirmLabel = 'Delete') {
   });
 }
 
-// Fullscreen lightbox. The close button sits OUTSIDE the image corner and the
-// frame sizes itself to the image's native aspect ratio (no cropping).
-export function lightbox(src, { metaEl = null, onDelete = null } = {}) {
-  const img = h('img', { src, alt: 'asset' });
+// Fullscreen image/video viewer. The close button sits outside the media.
+export function lightbox(src, { mime = 'image/png', metaEl = null, onDelete = null } = {}) {
+  const media = mime.startsWith('video/')
+    ? h('video', { src, controls: true, playsinline: true, loop: true, preload: 'metadata' })
+    : h('img', { src, alt: 'asset' });
   const frame = h('div', { class: 'lightbox-frame' },
     h('button', { class: 'lightbox-close', 'aria-label': 'Close', onclick: () => close() }, '✕'),
     // Delete sits OUTSIDE the image, top-left (mirror of the close button),
@@ -70,7 +71,7 @@ export function lightbox(src, { metaEl = null, onDelete = null } = {}) {
       class: 'lightbox-delete', 'aria-label': 'Delete asset',
       onclick: async () => { if (await onDelete()) close(); },
     }, 'Delete') : null,
-    img,
+    media,
     metaEl ? h('div', { class: 'lightbox-meta' }, metaEl) : null);
   const overlay = h('div', {
     class: 'overlay lightbox-overlay',
@@ -79,7 +80,15 @@ export function lightbox(src, { metaEl = null, onDelete = null } = {}) {
   const onKey = (e) => { if (e.key === 'Escape') close(); };
   document.addEventListener('keydown', onKey);
   document.body.append(overlay);
-  function close() { overlay.remove(); document.removeEventListener('keydown', onKey); }
+  function close() {
+    if (media.tagName === 'VIDEO') {
+      media.pause();
+      media.removeAttribute('src');
+      media.load();
+    }
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  }
   return { close };
 }
 

@@ -1,18 +1,26 @@
 """End-to-end API tests against a running Pleo backend (mock mode)."""
+import asyncio
 import base64
 import hashlib
 import hmac
+import io
 import json
 import os
 import sys
 import threading
 import time
+from pathlib import Path
 
 import httpx
+from PIL import Image
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 BASE = os.environ.get("PLEO_TEST_BASE", "http://127.0.0.1:3210")
 PASSWORD = "correct horse battery staple"
 results = []
+data_dir = Path(os.environ.get("PLEO_DATA", "data"))
+loras_dir = data_dir / "loras"
 
 
 def check(name, cond, detail=""):
@@ -82,7 +90,50 @@ check("cross-origin POST still rejected behind proxy", r.status_code == 403, r.t
 # --- models ---
 r = c.get("/api/models", headers=H)
 models = r.json()
-check("models list (4, mock mode)", len(models["models"]) == 4 and models["mock"] is True, r.text[:200])
+check("models list (5, mock mode)", len(models["models"]) == 5 and models["mock"] is True, r.text[:200])
+wan_model = next((m for m in models["models"] if m["id"] == "wan-2.2-i2v-a14b-lightning"), None)
+check("Wan distilled quality model metadata", wan_model and wan_model["kind"] == "img2video" and
+      "2026-04-12" in wan_model["distilled_experts"]["name"] and
+      wan_model["video"]["denoising_step_indices"] == [1000.0, 750.0, 500.0, 250.0] and
+      wan_model["video"]["timesteps"] == [1000.0, 937.5001, 833.3333, 625.0] and
+      wan_model["video"]["sample_shift"] == 5.0 and wan_model["video"]["boundary"] == 0.9 and
+      wan_model["video"]["boundary_step_index"] == 2 and
+      wan_model["lora_defaults"] == {"high_strength": 0.7, "low_strength": 0.5, "max_stack": 4} and
+      wan_model["output_mime"] == "video/mp4", str(wan_model))
+from backend import models_api, runner_manager
+from backend.models_api import _sources, _wanted
+from backend.registry import get_model
+wan_base_source = _sources(get_model("wan-2.2-i2v-a14b-lightning"))[0]
+check("Wan download keeps expert configs but skips replaced weights",
+      "transformer/config.json" in wan_base_source["required"] and
+      _wanted(wan_base_source, "transformer/config.json") and
+      not _wanted(wan_base_source, "transformer/diffusion_pytorch_model-00001-of-00012.safetensors"),
+      str(wan_base_source))
+
+saved_runner_state = dict(runner_manager._state)
+runner_manager._state.update(model_id="z-image-turbo", status="starting", proc=None)
+try:
+    asyncio.run(runner_manager.delete_weights("z-image-turbo"))
+    starting_delete_blocked = False
+except RuntimeError:
+    starting_delete_blocked = True
+finally:
+    runner_manager._state.clear()
+    runner_manager._state.update(saved_runner_state)
+check("model weights delete blocked while runner starts", starting_delete_blocked)
+
+with models_api._dl_lock:
+    models_api._downloads["z-image-turbo"] = {"status": "downloading"}
+try:
+    asyncio.run(models_api.delete_weights("z-image-turbo"))
+    download_delete_status = None
+except Exception as e:
+    download_delete_status = getattr(e, "status_code", None)
+finally:
+    with models_api._dl_lock:
+        models_api._downloads.pop("z-image-turbo", None)
+check("model weights delete blocked during download", download_delete_status == 409,
+      str(download_delete_status))
 
 # --- SSE collector ---
 events = []
@@ -138,6 +189,63 @@ png = r.content
 w = int.from_bytes(png[16:20], "big"); hgt = int.from_bytes(png[20:24], "big")
 check("result matches requested resolution", (w, hgt) == (256, 320), f"{w}x{hgt}")
 
+# --- Wan 2.2 I2V distilled quality profile (mock MP4 + dual-stage LoRAs) ---
+wan_lora_a = loras_dir / "wan-a.safetensors"
+wan_lora_b = loras_dir / "wan-b.safetensors"
+wan_lora_a.write_bytes(b"wan-lora-a")
+wan_lora_b.write_bytes(b"wan-lora-b")
+wan = {**gen, "model_id": "wan-2.2-i2v-a14b-lightning", "steps": 40, "cfg": 9,
+       "video_tier": "480p", "num_frames": 17, "fps": 8,
+       "loras": [{"file": wan_lora_a.name},
+                 {"file": wan_lora_b.name, "high_strength": 0.35, "low_strength": 0.8}],
+       "ref_image_b64": base64.b64encode(png).decode()}
+r = c.post("/api/generate", headers=H, json=wan)
+check("submit Wan image-to-video", r.status_code == 200, r.text)
+wan_job = r.json()["job"]
+check("Wan profile locked to distilled settings", wan_job["steps"] == 4 and
+      wan_job["num_frames"] == 81 and wan_job["fps"] == 16, str(wan_job))
+check("Wan derives source aspect at 480p area", (wan_job["width"], wan_job["height"]) == (560, 704), str(wan_job))
+deadline = time.time() + 30
+wan_done = None
+while time.time() < deadline:
+    q = c.get("/api/queue", headers=H).json()
+    wan_done = next((j for j in q["history"] if j["id"] == wan_job["id"]), None)
+    if wan_done:
+        break
+    time.sleep(0.5)
+check("Wan job completed", wan_done and wan_done["status"] == "done", str(wan_done))
+r = c.get(f"/api/results/{wan_done['result_id']}", headers=H)
+check("Wan result is playable MP4 MIME", r.status_code == 200 and
+      r.headers.get("content-type", "").startswith("video/mp4") and r.content[4:8] == b"ftyp", r.text[:100])
+wan_meta = json.loads(base64.b64decode(r.headers["x-pleo-meta-plain"]))
+check("Wan result records baked profile", wan_meta["cfg"] == 1 and wan_meta["steps"] == 4 and
+      "2026-04-12" in wan_meta["distilled_profile"] and wan_meta["fps"] == 16 and
+      wan_meta["lora_strengths"] == [{"high": 0.7, "low": 0.5}, {"high": 0.35, "low": 0.8}], str(wan_meta))
+check("Wan runner releases VRAM process after clip",
+      c.get("/api/models", headers=H).json()["runner"]["status"] == "stopped")
+c.delete(f"/api/results/{wan_done['result_id']}", headers=H)
+
+r = c.post("/api/generate", headers=H, json={**wan, "ref_image_b64": None})
+check("Wan without source rejected", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**wan, "ref_image_b64": "not base64"})
+check("Wan invalid source base64 rejected", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**wan,
+           "ref_image_b64": base64.b64encode(b"not an image").decode()})
+check("Wan invalid source image rejected", r.status_code == 400, r.text)
+for image_format in ("GIF", "TIFF"):
+    image_buf = io.BytesIO()
+    Image.new("RGB", (2, 2)).save(image_buf, format=image_format)
+    r = c.post("/api/generate", headers=H, json={**wan,
+               "ref_image_b64": base64.b64encode(image_buf.getvalue()).decode()})
+    check(f"Wan {image_format} source rejected", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**wan, "loras": [{"file": wan_lora_a.name}] * 5})
+check("Wan bounds LoRA stack for VRAM", r.status_code == 400 and "at most 4" in r.text, r.text)
+r = c.post("/api/generate", headers=H, json={**wan,
+           "loras": [{"file": wan_lora_a.name, "high_strength": 2.1, "low_strength": 0.5}]})
+check("Wan validates per-stage LoRA strengths", r.status_code == 422, r.text)
+wan_lora_a.unlink()
+wan_lora_b.unlink()
+
 # --- encrypted asset roundtrip (server sees opaque bytes) ---
 blob = os.urandom(50000)
 enc_meta = base64.b64encode(os.urandom(64)).decode()
@@ -148,6 +256,7 @@ asset_id = r.json()["id"]
 r = c.get("/api/assets", headers=H)
 entry = next((a for a in r.json()["assets"] if a["id"] == asset_id), None)
 check("asset listed with enc_meta", entry and entry["enc_meta"] == enc_meta and entry["size"] == len(blob))
+check("legacy asset MIME defaults to PNG", entry and entry["mime"] == "image/png", str(entry))
 r = c.get(f"/api/assets/{asset_id}/blob", headers=H)
 check("asset blob roundtrip (byte-exact)", r.content == blob)
 r = c.post(f"/api/jobs/{job_id}/asset", headers=H, json={"asset_id": asset_id})
@@ -165,6 +274,20 @@ check("outbox result gone after discard", c.get(f"/api/results/{result_id}", hea
 r = c.delete(f"/api/assets/{asset_id}", headers=H)
 check("asset delete", r.status_code == 200)
 check("asset gone from index", not any(a["id"] == asset_id for a in c.get("/api/assets", headers=H).json()["assets"]))
+
+video_blob = os.urandom(4096)
+r = c.post("/api/assets", headers={**H, "X-Pleo-Kind": "generated", "X-Pleo-Mime": "video/mp4",
+                                   "Content-Type": "application/octet-stream"}, content=video_blob)
+check("encrypted video asset accepted", r.status_code == 200 and r.json()["mime"] == "video/mp4", r.text)
+from backend import config as backend_config
+check("video assets have a separate output-safe size cap",
+      backend_config.MAX_VIDEO_ASSET_BYTES > backend_config.MAX_IMAGE_ASSET_BYTES)
+video_asset_id = r.json()["id"]
+check("encrypted video asset roundtrip", c.get(f"/api/assets/{video_asset_id}/blob", headers=H).content == video_blob)
+c.delete(f"/api/assets/{video_asset_id}", headers=H)
+r = c.post("/api/assets", headers={**H, "X-Pleo-Mime": "text/html",
+                                   "Content-Type": "application/octet-stream"}, content=b"ciphertext")
+check("unsupported asset MIME rejected", r.status_code == 400, r.text)
 
 # --- queue: second job queues, cancel queued job ---
 long_gen = {**gen, "steps": 30, "seed": -1}
@@ -203,8 +326,6 @@ r = c.post("/api/generate", headers=H, json={**gen, "loras": [{"file": "../../..
 check("lora path traversal rejected", r.status_code == 400, r.text)
 
 # --- loras: local file lifecycle ---
-from pathlib import Path
-loras_dir = Path("data/loras")
 (loras_dir / "test-lora.safetensors").write_bytes(b"\x00" * 128)
 r = c.get("/api/loras", headers=H)
 check("local lora listed", any(l["file"] == "test-lora.safetensors" for l in r.json()["loras"]))
@@ -400,7 +521,7 @@ check("vram profile + grad ckpt recorded", r.json()["vram_profile"] == "high"
       and r.json()["gradient_checkpointing"] is False, r.text[:300])
 # The run must own its data: the dataset is staged into the job dir, so
 # deleting it from Data Studio mid-run cannot break training.
-staged = Path("data/training") / tj2 / "dataset"
+staged = data_dir / "training" / tj2 / "dataset"
 check("dataset staged into job dir", staged.is_dir() and len(list(staged.glob("*.png"))) == 2,
       str(sorted(p.name for p in staged.glob("*")) if staged.is_dir() else "missing"))
 check("staged snapshot count recorded", (r.json().get("dataset_snapshot") or {}).get("images") == 2,

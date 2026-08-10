@@ -175,8 +175,9 @@ async function renderDetail(body, dsId, offs) {
   }
 
   async function importFromAssets() {
-    const { assets } = await api('/api/assets');
-    if (!assets.length) return toast('No assets to import', 'error');
+    const result = await api('/api/assets');
+    const assets = result.assets.filter(a => !a.mime || a.mime.startsWith('image/'));
+    if (!assets.length) return toast('No image assets to import', 'error');
     const list = h('div', { class: 'asset-grid' });
     const m = modal('Import from assets (decrypts into the dataset)', list, { wide: true });
     for (const a of assets.slice(0, 60)) {

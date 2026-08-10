@@ -33,6 +33,7 @@ def runner_env() -> dict:
     hosts — plain HTTP fallback is slower but never takes the process down.
     """
     env = dict(os.environ, PYTHONUNBUFFERED="1", PYTHONFAULTHANDLER="1")
+    env.setdefault("PYTORCH_CUDA_ALLOC_CONF", "expandable_segments:True")
     env.pop("HF_HUB_ENABLE_HF_TRANSFER", None)
     env.setdefault("HF_HUB_DISABLE_XET", "1")
     return env

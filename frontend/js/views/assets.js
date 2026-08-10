@@ -4,22 +4,33 @@ import { api, apiBlob } from '../api.js';
 import { decryptBytes, decryptJSON, encryptBytes, encryptJSON } from '../crypto.js';
 import { h, clear, toast, lightbox, confirmModal, spinner, fmtBytes } from '../ui.js';
 
-const urlCache = new Map(); // asset id -> objectURL (decrypted)
+const urlCache = new Map(); // asset id -> Promise<objectURL> (decrypted)
+
+export function assetMime(asset) { return asset?.mime || 'image/png'; }
 
 // Shared: decrypt an asset blob to an object URL (cached). Used here and by
 // the Running queue to show completed generations.
-export async function decryptedAssetURL(assetId) {
+export function decryptedAssetURL(assetId, mime = 'image/png') {
   if (urlCache.has(assetId)) return urlCache.get(assetId);
-  const resp = await apiBlob(`/api/assets/${assetId}/blob`);
-  const plain = await decryptBytes(await resp.arrayBuffer());
-  const url = URL.createObjectURL(new Blob([plain], { type: 'image/png' }));
-  urlCache.set(assetId, url);
-  return url;
+  const pending = (async () => {
+    const resp = await apiBlob(`/api/assets/${assetId}/blob`);
+    const plain = await decryptBytes(await resp.arrayBuffer());
+    return URL.createObjectURL(new Blob([plain], { type: mime }));
+  })();
+  urlCache.set(assetId, pending);
+  pending.catch(() => { if (urlCache.get(assetId) === pending) urlCache.delete(assetId); });
+  return pending;
+}
+
+export function evictDecryptedAssetURL(assetId) {
+  const pending = urlCache.get(assetId);
+  urlCache.delete(assetId);
+  if (pending) pending.then(url => URL.revokeObjectURL(url), () => {});
 }
 
 export async function render(root) {
   let filter = 'all';
-  const uploadInput = h('input', { type: 'file', accept: 'image/*', multiple: true, style: 'display:none', onchange: () => uploadRefs(uploadInput.files) });
+  const uploadInput = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp', multiple: true, style: 'display:none', onchange: () => uploadRefs(uploadInput.files) });
 
   const grid = h('div', { class: 'asset-grid' });
   const tabs = h('div', { class: 'tabs' },
@@ -60,7 +71,7 @@ export async function render(root) {
     if (!await confirmModal('Delete asset', 'Remove this asset from disk permanently?')) return false;
     try {
       await api(`/api/assets/${a.id}`, { method: 'DELETE' });
-      urlCache.delete(a.id);
+      evictDecryptedAssetURL(a.id);
       assets = assets.filter(x => x.id !== a.id);
       draw();
       toast('Asset deleted', 'success');
@@ -69,7 +80,11 @@ export async function render(root) {
   }
 
   function tile(a) {
-    const img = h('img', { alt: a.kind, loading: 'lazy' });
+    const mime = assetMime(a);
+    const isVideo = mime.startsWith('video/');
+    const media = isVideo
+      ? h('video', { muted: true, playsinline: true, preload: 'metadata', 'aria-label': `${a.kind} video` })
+      : h('img', { alt: a.kind, loading: 'lazy' });
     const pop = h('div', { class: 'tile-pop', hidden: true },
       h('button', {
         class: 'tile-pop-item danger', onclick: (e) => { e.stopPropagation(); pop.hidden = true; deleteAsset(a); },
@@ -82,37 +97,36 @@ export async function render(root) {
         pop.hidden = !wasHidden;
       },
     }, '⋮');
-    const el = h('div', { class: 'asset-tile', onclick: () => { pop.hidden = true; open(a, img.src); } },
-      img, h('span', { class: `badge tag ${a.kind === 'generated' ? 'ok' : ''}` }, a.kind),
+    const el = h('div', { class: 'asset-tile', onclick: async () => {
+      pop.hidden = true;
+      try { open(a, media.src || await decryptedAssetURL(a.id, mime)); }
+      catch (e) { toast(e.message, 'error'); }
+    } },
+      media, h('span', { class: `badge tag ${a.kind === 'generated' ? 'ok' : ''}` }, `${a.kind}${isVideo ? ' · video' : ''}`),
       menuBtn, pop);
-    decryptToURL(a).then(url => { img.src = url; }).catch(() => {
+    decryptedAssetURL(a.id, mime).then(url => { media.src = url; }).catch(() => {
       el.classList.add('broken');
       el.append(h('span', { class: 'muted', style: 'position:absolute;inset:0;display:flex;align-items:center;justify-content:center' }, 'decrypt failed'));
     });
     return el;
   }
 
-  async function decryptToURL(a) {
-    if (urlCache.has(a.id)) return urlCache.get(a.id);
-    const resp = await apiBlob(`/api/assets/${a.id}/blob`);
-    const plain = await decryptBytes(await resp.arrayBuffer());
-    const url = URL.createObjectURL(new Blob([plain], { type: 'image/png' }));
-    urlCache.set(a.id, url);
-    return url;
-  }
-
   async function open(a, src) {
+    const mime = assetMime(a);
     let metaText = `${a.kind} · ${fmtBytes(a.size)} · ${new Date(a.created * 1000).toLocaleString()}`;
     if (a.enc_meta) {
       try {
         const meta = await decryptJSON(a.enc_meta);
         const bits = [meta.prompt, meta.seed != null ? `seed ${meta.seed}` : null,
           meta.steps ? `${meta.steps} steps` : null, meta.cfg != null ? `cfg ${meta.cfg}` : null,
-          meta.width ? `${meta.width}×${meta.height}` : null, meta.name].filter(Boolean);
+          meta.width ? `${meta.width}×${meta.height}` : null,
+          meta.num_frames ? `${meta.num_frames} frames` : null,
+          meta.fps ? `${meta.fps} fps` : null, meta.name].filter(Boolean);
         if (bits.length) metaText = `${bits.join(' · ')}\n${metaText}`;
       } catch { metaText += ' · (metadata unreadable)'; }
     }
     lightbox(src, {
+      mime,
       metaEl: h('span', { style: 'white-space:pre-wrap' }, metaText),
       onDelete: () => deleteAsset(a),
     });
@@ -128,7 +142,9 @@ export async function render(root) {
         if (mod.enabled && !mod.allowed) { toast(`${f.name}: blocked by moderation`, 'error'); continue; }
         const encMeta = await encryptJSON({ name: f.name, type: f.type, uploaded: Date.now() });
         const enc = await encryptBytes(buf);
-        await api('/api/assets', { method: 'POST', body: enc, headers: { 'X-Pleo-Kind': 'reference', 'X-Pleo-Meta': encMeta } });
+        await api('/api/assets', { method: 'POST', body: enc, headers: {
+          'X-Pleo-Kind': 'reference', 'X-Pleo-Meta': encMeta, 'X-Pleo-Mime': f.type || 'image/png',
+        } });
         toast(`${f.name} uploaded (encrypted)`, 'success');
       } catch (e) {
         toast(`${f.name}: ${e.message}`, 'error');
