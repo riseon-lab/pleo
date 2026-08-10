@@ -24,6 +24,7 @@ import random
 import struct
 import sys
 import threading
+import traceback
 import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -509,6 +510,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._json(404, {"error": "not found"})
         except Exception as e:
+            traceback.print_exc()
             try:
                 self._json(500, {"error": str(e)[:500]})
             except Exception:

@@ -103,6 +103,9 @@ check("Wan distilled quality model metadata", wan_model and wan_model["kind"] ==
 from backend import models_api, runner_manager
 from backend.models_api import _sources, _wanted
 from backend.registry import get_model
+load_failure = httpx.Response(500, json={"error": "incompatible Wan checkpoint"})
+check("runner load failure preserves model error",
+      runner_manager._load_error(load_failure) == "incompatible Wan checkpoint")
 wan_base_source = _sources(get_model("wan-2.2-i2v-a14b-lightning"))[0]
 check("Wan download keeps expert configs but skips replaced weights",
       "transformer/config.json" in wan_base_source["required"] and

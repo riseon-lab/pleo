@@ -51,6 +51,14 @@ def _base_url() -> str:
     return f"http://127.0.0.1:{_state['port']}"
 
 
+def _load_error(response: httpx.Response) -> str:
+    try:
+        detail = response.json().get("error")
+    except (ValueError, AttributeError):
+        detail = None
+    return str(detail or response.text.strip() or f"HTTP {response.status_code}")
+
+
 async def start_runner(model_id: str) -> None:
     """Spawn (if needed) and load the model. Serialized behind _lock."""
     async with _lock:
@@ -89,7 +97,8 @@ async def start_runner(model_id: str) -> None:
             _publish_status()
             async with httpx.AsyncClient(timeout=httpx.Timeout(10, read=None)) as client:
                 r = await client.post(f"{_base_url()}/load")
-                r.raise_for_status()
+                if not r.is_success:
+                    raise RuntimeError(f"{model['name']} failed to load: {_load_error(r)}")
             _state["status"] = "ready"
             _publish_status()
         except Exception:
