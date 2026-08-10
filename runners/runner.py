@@ -167,20 +167,29 @@ def _png_rgb_rerender(w, h, seed, prompt):
 def _verified_hf_file(repo_id: str, filename: str, revision: str, expected_sha256: str) -> str:
     from huggingface_hub import hf_hub_download
 
-    path = hf_hub_download(repo_id, filename, revision=revision,
-                           cache_dir=os.path.join(CONFIG["hf_home"], "hub"))
+    cache_dir = os.path.join(CONFIG["hf_home"], "hub")
+    path = hf_hub_download(repo_id, filename, revision=revision, cache_dir=cache_dir)
     marker_dir = os.path.join(CONFIG["hf_home"], ".pleo-verified")
     marker = os.path.join(marker_dir, expected_sha256)
     if not os.path.exists(marker):
-        digest = hashlib.sha256()
-        with open(path, "rb") as weights:
-            for block in iter(lambda: weights.read(8 * 1024 * 1024), b""):
-                digest.update(block)
-        if digest.hexdigest() != expected_sha256:
+        def valid(candidate):
+            digest = hashlib.sha256()
+            with open(candidate, "rb") as weights:
+                for block in iter(lambda: weights.read(8 * 1024 * 1024), b""):
+                    digest.update(block)
+            return digest.hexdigest() == expected_sha256
+
+        verified = valid(path)
+        if not verified:
+            print(f"[runner] repairing corrupt cached weight: {filename}", flush=True)
+            path = hf_hub_download(repo_id, filename, revision=revision,
+                                   cache_dir=cache_dir, force_download=True)
+            verified = valid(path)
+        if not verified:
             raise RuntimeError(f"Checksum mismatch for distilled Wan expert: {filename}")
         os.makedirs(marker_dir, exist_ok=True)
-        with open(marker, "w", encoding="ascii") as verified:
-            verified.write(filename)
+        with open(marker, "w", encoding="ascii") as marker_file:
+            marker_file.write(filename)
     return path
 
 

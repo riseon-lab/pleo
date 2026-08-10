@@ -103,9 +103,37 @@ check("Wan distilled quality model metadata", wan_model and wan_model["kind"] ==
 from backend import models_api, runner_manager
 from backend.models_api import _sources, _wanted
 from backend.registry import get_model
+from runners import runner as model_runner
 load_failure = httpx.Response(500, json={"error": "incompatible Wan checkpoint"})
 check("runner load failure preserves model error",
       runner_manager._load_error(load_failure) == "incompatible Wan checkpoint")
+
+import huggingface_hub
+verify_dir = data_dir / "checksum-repair-test"
+verify_dir.mkdir(parents=True, exist_ok=True)
+bad_weight, good_weight = verify_dir / "bad.safetensors", verify_dir / "good.safetensors"
+bad_weight.write_bytes(b"corrupt")
+good_weight.write_bytes(b"verified model weight")
+expected_weight_sha = hashlib.sha256(good_weight.read_bytes()).hexdigest()
+download_calls = []
+original_download = huggingface_hub.hf_hub_download
+original_runner_config = model_runner.CONFIG
+
+def fake_download(*_args, force_download=False, **_kwargs):
+    download_calls.append(force_download)
+    return str(good_weight if force_download else bad_weight)
+
+huggingface_hub.hf_hub_download = fake_download
+model_runner.CONFIG = {"hf_home": str(verify_dir)}
+try:
+    verified_weight = model_runner._verified_hf_file("test/repo", "weight.safetensors",
+                                                      "revision", expected_weight_sha)
+finally:
+    huggingface_hub.hf_hub_download = original_download
+    model_runner.CONFIG = original_runner_config
+check("corrupt Wan cache is force-downloaded and re-verified",
+      verified_weight == str(good_weight) and download_calls == [False, True], str(download_calls))
+
 wan_base_source = _sources(get_model("wan-2.2-i2v-a14b-lightning"))[0]
 check("Wan download keeps expert configs but skips replaced weights",
       "transformer/config.json" in wan_base_source["required"] and
