@@ -417,12 +417,16 @@ def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
                 "moderation_b64": base64.b64encode(moderation).decode(), "seed": seed}
     finally:
         try:
-            pipe.maybe_free_model_hooks()
-        except Exception:
-            pass
-        source.close()
-        gc.collect()
-        torch.cuda.empty_cache()
+            if names:
+                pipe.unload_lora_weights()
+        finally:
+            try:
+                pipe.maybe_free_model_hooks()
+            except Exception:
+                pass
+            source.close()
+            gc.collect()
+            torch.cuda.empty_cache()
 
 
 def real_generate(params: dict, emit) -> dict:

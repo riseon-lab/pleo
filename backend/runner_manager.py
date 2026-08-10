@@ -63,7 +63,8 @@ async def start_runner(model_id: str) -> None:
     """Spawn (if needed) and load the model. Serialized behind _lock."""
     async with _lock:
         model = get_model(model_id)
-        if _state["model_id"] == model_id and _state["status"] in ("ready", "busy"):
+        status = runner_status()
+        if status["model_id"] == model_id and status["status"] in ("ready", "busy"):
             return
         await _stop_locked()
 

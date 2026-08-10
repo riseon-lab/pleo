@@ -252,8 +252,9 @@ wan_meta = json.loads(base64.b64decode(r.headers["x-pleo-meta-plain"]))
 check("Wan result records baked profile", wan_meta["cfg"] == 1 and wan_meta["steps"] == 4 and
       "2026-04-12" in wan_meta["distilled_profile"] and wan_meta["fps"] == 16 and
       wan_meta["lora_strengths"] == [{"high": 0.7, "low": 0.5}, {"high": 0.35, "low": 0.8}], str(wan_meta))
-check("Wan runner releases VRAM process after clip",
-      c.get("/api/models", headers=H).json()["runner"]["status"] == "stopped")
+wan_runner = c.get("/api/models", headers=H).json()["runner"]
+check("Wan runner stays warm between clips",
+      wan_runner["status"] == "ready" and wan_runner["model_id"] == wan["model_id"], str(wan_runner))
 c.delete(f"/api/results/{wan_done['result_id']}", headers=H)
 
 r = c.post("/api/generate", headers=H, json={**wan, "video_tier": "720p", "video_aspect": "9:16"})

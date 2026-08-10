@@ -117,9 +117,9 @@
         "max_stack": 4
       },
       "output_mime": "video/mp4",
-      "release_vram_after_generate": true,
+      "keep_warm_seconds": 600,
       "min_cuda_memory_gb": 80,
-      "notes": "Wan 2.2 image-to-video using LightX2V's newer full 720p high/low distilled experts for maximum quality. Fixed 4-step CFG 1/1 schedule; 81 frames at 16 fps. CPU offload and per-clip runner teardown target 90 GB VRAM safely.",
+      "notes": "Wan 2.2 image-to-video using LightX2V's newer full 720p high/low distilled experts for maximum quality. Fixed 4-step CFG 1/1 schedule; 81 frames at 16 fps. CPU offload and a 10-minute warm runner target 96 GB VRAM safely.",
       "dim_multiple": 16
     }
   ],

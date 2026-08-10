@@ -172,12 +172,18 @@ def _ensure_worker() -> None:
 
 async def _worker() -> None:
     global _current
+    last_model = None
     while True:
         if not _queue:
             _wakeup.clear()
+            keep_warm = int(last_model.get("keep_warm_seconds", 0)) if last_model else 0
             try:
-                await asyncio.wait_for(_wakeup.wait(), timeout=300)
+                await asyncio.wait_for(_wakeup.wait(), timeout=keep_warm or 300)
             except asyncio.TimeoutError:
+                if keep_warm:
+                    await runner_manager.stop_runner()
+                    if _queue:
+                        continue
                 return  # idle; a new submit re-creates the worker
             continue
         job = _queue.pop(0)
@@ -185,6 +191,7 @@ async def _worker() -> None:
         job["status"] = "starting"
         _publish_job(job)
         model = get_model(job["model_id"])
+        last_model = model
         try:
             await runner_manager.start_runner(job["model_id"])
             job["status"] = "running"
@@ -263,7 +270,7 @@ async def _worker() -> None:
             job["status"] = "error"
             job["error"] = str(e)[:500]
         finally:
-            if model.get("release_vram_after_generate"):
+            if model.get("release_vram_after_generate") or job["status"] == "error":
                 try:
                     await runner_manager.stop_runner()
                 except Exception:
