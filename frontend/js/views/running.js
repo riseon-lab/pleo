@@ -67,8 +67,8 @@ export async function render(root) {
     },
   }, models.map(m => h('option', { value: m.id, selected: m.id === modelId }, m.name)));
 
-  const prompt = h('textarea', { placeholder: 'Prompt…', oninput: persist });
-  const promptHelp = h('p', { class: 'muted field-help', hidden: true }, 'Describe the action and camera movement; appearance comes from the start image.');
+  const prompt = h('textarea', { class: 'main-prompt', placeholder: 'Prompt…', oninput: persist });
+  const promptHelp = h('p', { class: 'muted field-help', hidden: true }, 'Describe the action and camera movement. This distilled CFG 1 profile does not use a negative prompt.');
   const promptField = h('label', { class: 'field' }, h('span', {}, 'Prompt'), prompt, promptHelp);
   const negative = h('textarea', { placeholder: 'Negative prompt (optional)', style: 'min-height:48px', oninput: persist });
   const negativeField = h('label', { class: 'field' }, h('span', {}, 'Negative prompt'), negative);
@@ -580,7 +580,7 @@ export async function render(root) {
       if (isVideo) {
         if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
         resultObjectURL = null;
-        showMedia(refFile.url, refFile.mime);
+        showMedia(refFile.url, refFile.mime, videoSize.width, videoSize.height);
       }
       const res = await api('/api/generate', { method: 'POST', body });
       toast(res.position > 1 ? `Queued (position ${res.position})` : `${isVideo ? 'Video generation' : 'Generation'} started`);
@@ -605,7 +605,12 @@ export async function render(root) {
     if (progress !== null) progressBar.style.width = `${progress}%`;
   }
 
-  function showMedia(url, mime = 'image/png') {
+  function setPreviewAspect(mediaWidth, mediaHeight) {
+    if (mediaWidth > 0 && mediaHeight > 0) previewBox.style.aspectRatio = `${mediaWidth} / ${mediaHeight}`;
+  }
+
+  function showMedia(url, mime = 'image/png', mediaWidth = 0, mediaHeight = 0) {
+    setPreviewAspect(mediaWidth, mediaHeight);
     const isVideo = mime.startsWith('video/');
     previewVideo.hidden = !isVideo;
     previewImg.hidden = isVideo;
@@ -627,6 +632,9 @@ export async function render(root) {
 
   function renderQueue(q) {
     clear(queueList);
+    if (modelKind(q.current?.model_id) === 'img2video') {
+      setPreviewAspect(q.current.width, q.current.height);
+    }
     const rows = [];
     if (q.current) rows.push([q.current, 'now']);
     for (const j of q.queued) rows.push([j, 'queued']);
@@ -691,7 +699,7 @@ export async function render(root) {
         if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
         const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
         resultObjectURL = url;
-        showMedia(url, mime);
+        showMedia(url, mime, meta.width || job.width, meta.height || job.height);
         if (mime.startsWith('video/')) {
           previewVideo.onclick = null;
           previewImg.onclick = null;
@@ -747,6 +755,9 @@ export async function render(root) {
       setStatus(stage || `Step ${ev.step} / ${ev.total}`, { cancellable: true, progress: pct });
     } else if (ev.type === 'job') {
       const j = ev.job;
+      if (modelKind(j.model_id) === 'img2video' && j.status !== 'queued' && j.width > 0 && j.height > 0) {
+        setPreviewAspect(j.width, j.height);
+      }
       if (j.status === 'queued') refreshQueue();
       if (j.status === 'starting') { liveJobId = j.id; setStatus(`Starting ${modelName(j.model_id)}…`, { cancellable: true, progress: 0 }); refreshQueue(); }
       if (j.status === 'running') { liveJobId = j.id; setStatus('Generating…', { cancellable: true, progress: 0 }); refreshQueue(); }

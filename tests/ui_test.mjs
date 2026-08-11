@@ -130,6 +130,8 @@ check('Wan optimal timing defaults to 5 seconds at 16 fps',
   await page.locator('.video-fps button[aria-pressed="true"]').textContent() === '16 fps');
 check('Wan hides incompatible freeform controls',
   await page.locator('label:has(span:text("Negative prompt")):visible, label:has(span:text-is("Resolution")):visible, .grid2:has(span:text("Steps")):visible, .grid2:has(span:text("Width")):visible').count() === 0);
+check('Wan explains why negative prompting is unavailable',
+  (await page.locator('label:has(span:text-is("Prompt")) .field-help:visible').textContent()).includes('does not use a negative prompt'));
 await page.locator('.video-source-actions input[type=file]').setInputFiles({
   name: 'start.gif', mimeType: 'image/gif', buffer: tinyPng(1),
 });
@@ -160,6 +162,9 @@ await page.click('.video-tier button:has-text("Portrait 9:16")');
 check('Wan portrait framing shows its exact centre-cropped output',
   (await page.locator('.video-output-line').textContent()).includes('720×1280') &&
   await page.locator('.video-source-drop.portrait').count() === 1);
+const wanPortraitBox = await page.locator('.preview-box').boundingBox();
+check('Wan generation monitor follows portrait output dimensions',
+  wanPortraitBox && wanPortraitBox.height > wanPortraitBox.width * 1.7, JSON.stringify(wanPortraitBox));
 await page.click('.video-seconds button:has-text("8s")');
 await page.click('.video-fps button:has-text("12 fps")');
 check('Wan timing pills calculate a valid long clip',
@@ -181,6 +186,9 @@ await page.waitForSelector('.preview-box video:not([hidden])', { timeout: 10000 
 await page.waitForFunction(() => document.querySelector('.preview-box video')?.readyState >= 1);
 check('completed Wan result resumes after navigation and decodes as video',
   (await page.locator('.preview-box video').getAttribute('src')).startsWith('blob:'));
+const resumedWanBox = await page.locator('.preview-box').boundingBox();
+check('resumed Wan monitor retains generated dimensions',
+  resumedWanBox && resumedWanBox.height > resumedWanBox.width * 1.7, JSON.stringify(resumedWanBox));
 const wanSaved = await page.evaluate(async () => {
   const token = sessionStorage.getItem('pleo-token');
   const response = await fetch('/api/queue', { headers: { Authorization: `Bearer ${token}` } });
@@ -259,6 +267,8 @@ const overflow = await page.evaluate(`(${maxRight})() - window.innerWidth`);
 check('mobile: no element wider than viewport', overflow <= 1, `${Math.round(overflow)}px overflow`);
 const inputPx = await page.locator('textarea[placeholder="Prompt…"]').evaluate(el => getComputedStyle(el).fontSize);
 check('mobile: inputs are 16px (no iOS focus zoom)', inputPx === '16px', inputPx);
+const mobilePrompt = await page.locator('textarea[placeholder="Prompt…"]').boundingBox();
+check('mobile: main prompt has a larger writing area', mobilePrompt && mobilePrompt.height >= 150, JSON.stringify(mobilePrompt));
 await page.screenshot({ path: SHOTS + '08-mobile.png' });
 
 // ---- data studio ----

@@ -403,6 +403,7 @@ pre.output {
   .nav-item .badge { display: none; }
   .view { padding: 18px 14px 110px; }
   .run-layout { grid-template-columns: 1fr; }
+  .main-prompt { min-height: 150px; }
   /* Narrow-screen form + list behavior: single column, wrapping rows */
   .grid2 { grid-template-columns: 1fr; }
   .list-row { flex-wrap: wrap; }
