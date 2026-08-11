@@ -90,6 +90,8 @@
         "fps": 16
       },
       "video": {
+        "fps_options": [12, 16, 20, 24],
+        "seconds_options": [3, 4, 5, 6, 7, 8],
         "tiers": {
           "480p": 399360,
           "720p": 921600
@@ -119,7 +121,7 @@
       "output_mime": "video/mp4",
       "keep_warm_seconds": 600,
       "min_cuda_memory_gb": 80,
-      "notes": "Wan 2.2 image-to-video using LightX2V's newer full 720p high/low distilled experts for maximum quality. Fixed 4-step CFG 1/1 schedule; 81 frames at 16 fps. CPU offload and a 10-minute warm runner target 96 GB VRAM safely.",
+      "notes": "Wan 2.2 image-to-video using LightX2V's newer full 720p high/low distilled experts for maximum quality. Fixed 4-step CFG 1/1 schedule; 5s at 16 fps by default, configurable from 3–8s and 12–24 fps. CPU offload and a 10-minute warm runner target 96 GB VRAM safely.",
       "dim_multiple": 16
     }
   ],

@@ -18,8 +18,8 @@ const PRESETS = [
 const WAN_VIDEO = {
   steps: 4,
   cfg: 1,
-  numFrames: 81,
-  fps: 16,
+  fpsOptions: [12, 16, 20, 24],
+  secondsOptions: [3, 4, 5, 6, 7, 8],
   tiers: {
     '480p': { label: '480p', detail: 'Safer · faster', maxArea: 480 * 832 },
     '720p': { label: '720p', detail: 'More detail · higher VRAM', maxArea: 720 * 1280 },
@@ -48,6 +48,8 @@ export async function render(root) {
   let refFile = null; // transient plaintext source for edit/I2V models
   let videoTier = params.video_tier || model.defaults?.video_tier || '480p';
   let videoAspect = params.video_aspect || model.defaults?.video_aspect || 'source';
+  let videoFps = params.fps || model.defaults?.fps || 16;
+  let videoSeconds = params.video_seconds || Math.round(((params.num_frames || 81) - 1) / videoFps) || 5;
   let resultObjectURL = null;
   let liveJobId = null;
   let disposed = false;
@@ -135,17 +137,25 @@ export async function render(root) {
     h('button', { onclick: () => { videoTier = tier; renderVideoTier(); persist(); syncAspect(); } },
       h('strong', {}, item.label), h('small', {}, item.detail))));
   const videoTierField = h('div', { class: 'field' }, h('span', {}, 'Output tier'), tierButtons);
+  const fpsButtons = h('div', { class: 'video-pills video-fps', role: 'group', 'aria-label': 'Frames per second' }, WAN_VIDEO.fpsOptions.map(fps =>
+    h('button', { onclick: () => { videoFps = fps; renderVideoTiming(); persist(); } }, `${fps} fps`)));
+  const videoFpsField = h('div', { class: 'field' }, h('span', {}, 'Frame rate'), fpsButtons);
+  const secondsButtons = h('div', { class: 'video-pills video-seconds', role: 'group', 'aria-label': 'Video duration' }, WAN_VIDEO.secondsOptions.map(seconds =>
+    h('button', { onclick: () => { videoSeconds = seconds; renderVideoTiming(); persist(); } }, `${seconds}s`)));
+  const videoSecondsField = h('div', { class: 'field' }, h('span', {}, 'Duration'), secondsButtons);
   const videoOutputLine = h('p', { class: 'muted video-output-line' }, 'Output follows the start image aspect ratio.');
+  const wanTimingInfo = h('p', {});
   const wanInfo = h('div', { class: 'wan-baked' },
     h('div', { class: 'row between' }, h('strong', {}, 'LightX2V 720p distilled experts'), h('span', { class: 'badge ok' }, 'baked')),
     h('p', {}, '2026 high-noise + low-noise quality checkpoints'),
-    h('p', {}, 'CFG 1 / 1 · 4 steps · 81 frames · 16 fps · ~5 sec'));
-  const wanControls = h('div', { hidden: true }, videoSourceField, videoAspectField, videoTierField, videoOutputLine, wanInfo);
+    wanTimingInfo);
+  const wanControls = h('div', { hidden: true }, videoSourceField, videoAspectField, videoTierField,
+    videoSecondsField, videoFpsField, videoOutputLine, wanInfo);
 
   const loraSummary = h('div', { class: 'lora-chiprow' });
   const loraBtn = h('button', { class: 'btn ghost small', onclick: openLoraModal }, 'Manage LoRAs');
   const loraTitle = h('span', {}, 'LoRA stack');
-  const loraHelp = h('p', { class: 'muted field-help', hidden: true }, 'Wan applies each LoRA separately to its high-noise motion stage and low-noise detail stage.');
+  const loraHelp = h('p', { class: 'muted field-help', hidden: true }, 'Stack up to four files. High and Low are expert stages, not a two-LoRA limit; new imports default to H 0.70 / L 0.50.');
   const loraField = h('div', { class: 'field' },
     loraTitle, loraHelp, loraSummary, h('div', { style: 'margin-top:8px' }, loraBtn));
 
@@ -212,6 +222,9 @@ export async function render(root) {
       width: +width.value, height: +height.value,
       video_tier: videoTier,
       video_aspect: videoAspect,
+      video_seconds: videoSeconds,
+      num_frames: videoFrameCount(),
+      fps: videoFps,
     });
   }
 
@@ -226,6 +239,9 @@ export async function render(root) {
     height.value = params.height ?? 1024;
     videoTier = params.video_tier || model.defaults?.video_tier || '480p';
     videoAspect = params.video_aspect || model.defaults?.video_aspect || 'source';
+    videoFps = WAN_VIDEO.fpsOptions.includes(+params.fps) ? +params.fps : model.defaults?.fps || 16;
+    const savedSeconds = params.video_seconds || Math.round(((params.num_frames || 81) - 1) / videoFps);
+    videoSeconds = WAN_VIDEO.secondsOptions.includes(+savedSeconds) ? +savedSeconds : 5;
     const p = PRESETS.find(p => p.w === +width.value && p.h === +height.value);
     presetSel.value = p ? p.label : 'custom';
     wanControls.hidden = !isVideo;
@@ -236,14 +252,15 @@ export async function render(root) {
     dimensionFields.hidden = isVideo;
     refField.style.display = model.kind === 'edit' ? '' : 'none';
     loraField.hidden = false;
-    loraTitle.textContent = isVideo ? 'Wan LoRA stack' : 'LoRA stack';
+    loraTitle.textContent = isVideo ? `Wan LoRA stack · up to ${wanLoraDefaults(model).maxStack}` : 'LoRA stack';
     loraHelp.hidden = !isVideo;
-    genBtn.textContent = isVideo ? 'Generate 5s video' : 'Generate';
+    genBtn.textContent = isVideo ? 'Generate video' : 'Generate';
     previewEmpty.textContent = isVideo
       ? 'Your video appears here. The start frame stays visible while Wan works.'
       : 'Generations appear here. Live noise previews stream in step by step.';
     renderVideoTier();
     renderVideoAspect();
+    renderVideoTiming();
     renderVideoSource();
     renderLoraSummary();
     syncAspect();
@@ -274,6 +291,24 @@ export async function render(root) {
     });
     videoSourceDrop.classList.toggle('portrait', videoAspect === '9:16');
     renderVideoSource();
+  }
+
+  function videoFrameCount() { return videoSeconds * videoFps + 1; }
+
+  function renderVideoTiming() {
+    [...fpsButtons.children].forEach((button, i) => {
+      const selected = WAN_VIDEO.fpsOptions[i] === videoFps;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', selected);
+    });
+    [...secondsButtons.children].forEach((button, i) => {
+      const selected = WAN_VIDEO.secondsOptions[i] === videoSeconds;
+      button.classList.toggle('selected', selected);
+      button.setAttribute('aria-pressed', selected);
+    });
+    const frames = videoFrameCount();
+    wanTimingInfo.textContent = `CFG 1 / 1 · 4 steps · ${frames} frames · ${videoFps} fps · ${videoSeconds}s${frames > 81 ? ' · long clip: more VRAM' : ''}`;
+    if (model.kind === 'img2video') genBtn.textContent = `Generate ${videoSeconds}s video`;
   }
 
   function renderVideoSource() {
@@ -528,8 +563,8 @@ export async function render(root) {
         ref_image_b64: refFile.b64,
         video_tier: videoTier,
         video_aspect: videoAspect,
-        num_frames: WAN_VIDEO.numFrames,
-        fps: WAN_VIDEO.fps,
+        num_frames: videoFrameCount(),
+        fps: videoFps,
       } : {
         model_id: modelId,
         prompt: prompt.value,

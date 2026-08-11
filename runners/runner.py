@@ -357,6 +357,12 @@ def _moderation_sheet(frames) -> bytes:
     return buf.getvalue()
 
 
+def _wan_required_vram_gib(video_tier: str, num_frames: int, adapter_gib: float) -> float:
+    base = 78 if video_tier == "720p" else 70
+    # ponytail: 60 GiB is the fixed model floor; tune it if measured long-clip peaks disagree.
+    return 60 + (base - 60) * max(1, num_frames / 81) + adapter_gib
+
+
 def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
     import torch
     from PIL import Image, ImageOps
@@ -366,7 +372,7 @@ def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
                     if lora["high_strength"] > 0 or lora["low_strength"] > 0]
     free_gib = torch.cuda.mem_get_info()[0] / 2 ** 30
     adapter_gib = sum(os.path.getsize(lora["path"]) for lora in active_loras) / 2 ** 30
-    required = (78 if params["video_tier"] == "720p" else 70) + adapter_gib
+    required = _wan_required_vram_gib(params["video_tier"], params["num_frames"], adapter_gib)
     if free_gib < required:
         raise RuntimeError(f"Wan {params['video_tier']} with this LoRA stack needs about "
                            f"{required:.1f} GB free VRAM; {free_gib:.1f} GB is free")

@@ -47,7 +47,7 @@ class GenerateBody(BaseModel):
     ref_image_b64: Optional[str] = None  # plaintext, transient, for edit/I2V models
     video_tier: Optional[str] = None
     video_aspect: Optional[str] = None
-    num_frames: Optional[int] = Field(None, ge=1, le=81)
+    num_frames: Optional[int] = Field(None, ge=1, le=193)
     fps: Optional[int] = Field(None, ge=1, le=60)
 
 
@@ -134,6 +134,15 @@ async def submit(body: GenerateBody):
             if not verdict["allowed"]:
                 raise HTTPException(422, "Reference image blocked by moderation")
     defaults = model["defaults"]
+    if is_video:
+        fps = body.fps or defaults["fps"]
+        num_frames = body.num_frames or defaults["num_frames"]
+        fps_options = model["video"]["fps_options"]
+        seconds_options = model["video"]["seconds_options"]
+        if fps not in fps_options:
+            raise HTTPException(400, f"fps must be one of: {', '.join(map(str, fps_options))}")
+        if num_frames not in {seconds * fps + 1 for seconds in seconds_options}:
+            raise HTTPException(400, "num_frames must match a supported 3–8 second duration at the selected fps")
     job = {
         "id": new_id(),
         "model_id": body.model_id,
@@ -153,8 +162,8 @@ async def submit(body: GenerateBody):
         job.update({
             "video_tier": video_tier,
             "video_aspect": video_aspect,
-            "num_frames": defaults["num_frames"],
-            "fps": defaults["fps"],
+            "num_frames": num_frames,
+            "fps": fps,
             "mime": model["output_mime"],
         })
     _queue.append(job)

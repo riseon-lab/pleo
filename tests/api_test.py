@@ -98,6 +98,8 @@ check("Wan distilled quality model metadata", wan_model and wan_model["kind"] ==
       wan_model["video"]["timesteps"] == [1000.0, 937.5001, 833.3333, 625.0] and
       wan_model["video"]["sample_shift"] == 5.0 and wan_model["video"]["boundary"] == 0.9 and
       wan_model["video"]["boundary_step_index"] == 2 and
+      wan_model["video"]["fps_options"] == [12, 16, 20, 24] and
+      wan_model["video"]["seconds_options"] == [3, 4, 5, 6, 7, 8] and
       wan_model["lora_defaults"] == {"high_strength": 0.7, "low_strength": 0.5, "max_stack": 4} and
       wan_model["output_mime"] == "video/mp4", str(wan_model))
 from backend import models_api, runner_manager
@@ -226,7 +228,7 @@ wan_lora_b = loras_dir / "wan-b.safetensors"
 wan_lora_a.write_bytes(b"wan-lora-a")
 wan_lora_b.write_bytes(b"wan-lora-b")
 wan = {**gen, "model_id": "wan-2.2-i2v-a14b-lightning", "steps": 40, "cfg": 9,
-       "video_tier": "480p", "num_frames": 17, "fps": 8,
+       "video_tier": "480p", "num_frames": 81, "fps": 16,
        "loras": [{"file": wan_lora_a.name},
                  {"file": wan_lora_b.name, "high_strength": 0.35, "low_strength": 0.8}],
        "ref_image_b64": base64.b64encode(png).decode()}
@@ -257,11 +259,13 @@ check("Wan runner stays warm between clips",
       wan_runner["status"] == "ready" and wan_runner["model_id"] == wan["model_id"], str(wan_runner))
 c.delete(f"/api/results/{wan_done['result_id']}", headers=H)
 
-r = c.post("/api/generate", headers=H, json={**wan, "video_tier": "720p", "video_aspect": "9:16"})
+r = c.post("/api/generate", headers=H, json={**wan, "video_tier": "720p", "video_aspect": "9:16",
+                                                    "num_frames": 97, "fps": 12})
 check("Wan accepts portrait framing", r.status_code == 200, r.text)
 portrait_job = r.json()["job"]
 check("Wan portrait uses exact 9:16 720p dimensions", (portrait_job["width"], portrait_job["height"]) == (720, 1280) and
-      portrait_job["video_aspect"] == "9:16", str(portrait_job))
+      portrait_job["video_aspect"] == "9:16" and portrait_job["num_frames"] == 97 and portrait_job["fps"] == 12,
+      str(portrait_job))
 check("cancel portrait check job", c.post(f"/api/jobs/{portrait_job['id']}/cancel", headers=H).status_code == 200)
 
 r = c.post("/api/generate", headers=H, json={**wan, "ref_image_b64": None})
@@ -284,6 +288,10 @@ r = c.post("/api/generate", headers=H, json={**wan,
 check("Wan validates per-stage LoRA strengths", r.status_code == 422, r.text)
 r = c.post("/api/generate", headers=H, json={**wan, "video_aspect": "square"})
 check("Wan rejects unsupported framing", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**wan, "num_frames": 82})
+check("Wan rejects off-grid duration", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**wan, "fps": 8})
+check("Wan rejects unsupported fps", r.status_code == 400, r.text)
 wan_lora_a.unlink()
 wan_lora_b.unlink()
 

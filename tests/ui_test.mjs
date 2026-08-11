@@ -39,7 +39,9 @@ const check = (name, cond, detail = '') => {
   console.log(`${cond ? 'PASS' : 'FAIL'}  ${name}${cond ? '' : `  [${detail}]`}`);
 };
 
-const browser = await chromium.launch();
+const browser = await chromium.launch(process.env.PLEO_CHROMIUM_PATH
+  ? { executablePath: process.env.PLEO_CHROMIUM_PATH }
+  : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(String(e)));
@@ -123,6 +125,9 @@ await page.click('.nav-item[data-path="running"]');
 await page.selectOption('label:has(span:text("Model")) select', 'wan-2.2-i2v-a14b-lightning');
 check('Wan quality profile shown', await page.locator('.wan-baked:visible').textContent()
   .then(t => t.includes('CFG 1 / 1') && t.includes('81 frames')));
+check('Wan optimal timing defaults to 5 seconds at 16 fps',
+  await page.locator('.video-seconds button[aria-pressed="true"]').textContent() === '5s' &&
+  await page.locator('.video-fps button[aria-pressed="true"]').textContent() === '16 fps');
 check('Wan hides incompatible freeform controls',
   await page.locator('label:has(span:text("Negative prompt")):visible, label:has(span:text-is("Resolution")):visible, .grid2:has(span:text("Steps")):visible, .grid2:has(span:text("Width")):visible').count() === 0);
 await page.locator('.video-source-actions input[type=file]').setInputFiles({
@@ -141,8 +146,13 @@ await page.click('.video-tier button:has-text("Portrait 9:16")');
 check('Wan portrait framing shows its exact centre-cropped output',
   (await page.locator('.video-output-line').textContent()).includes('720×1280') &&
   await page.locator('.video-source-drop.portrait').count() === 1);
+await page.click('.video-seconds button:has-text("8s")');
+await page.click('.video-fps button:has-text("12 fps")');
+check('Wan timing pills calculate a valid long clip',
+  (await page.locator('.wan-baked').textContent()).includes('97 frames') &&
+  (await page.locator('button:text("Generate 8s video")').count()) === 1);
 await page.fill('textarea[placeholder="Prompt…"]', 'slow cinematic push-in');
-await page.click('button:text("Generate 5s video")');
+await page.click('button:text("Generate 8s video")');
 await page.waitForSelector('.toast:has-text("Video generation started")');
 await page.click('.nav-item[data-path="models"]');
 await page.waitForFunction(async () => {
@@ -165,7 +175,8 @@ const wanSaved = await page.evaluate(async () => {
 });
 check('Wan result keeps video MIME, 720p portrait framing, and encrypted asset link',
   wanSaved?.mime === 'video/mp4' && wanSaved?.video_tier === '720p' && wanSaved?.video_aspect === '9:16' &&
-  wanSaved?.width === 720 && wanSaved?.height === 1280 && Boolean(wanSaved?.asset_id), JSON.stringify(wanSaved));
+  wanSaved?.width === 720 && wanSaved?.height === 1280 && wanSaved?.num_frames === 97 && wanSaved?.fps === 12 &&
+  Boolean(wanSaved?.asset_id), JSON.stringify(wanSaved));
 const storedPrefix = await page.evaluate(async (assetId) => {
   const token = sessionStorage.getItem('pleo-token');
   const response = await fetch(`/api/assets/${assetId}/blob`, { headers: { Authorization: `Bearer ${token}` } });
