@@ -28,6 +28,16 @@ export function evictDecryptedAssetURL(assetId) {
   if (pending) pending.then(url => URL.revokeObjectURL(url), () => {});
 }
 
+export async function saveReferenceAsset(bytes, name, mime) {
+  const mod = await api('/api/moderate', { method: 'POST', body: { image_b64: bufToB64(bytes) } });
+  if (mod.enabled && !mod.allowed) throw new Error('blocked by moderation');
+  const encMeta = await encryptJSON({ name, type: mime, uploaded: Date.now() });
+  const enc = await encryptBytes(bytes.slice(0));
+  return api('/api/assets', { method: 'POST', body: enc, headers: {
+    'X-Pleo-Kind': 'reference', 'X-Pleo-Meta': encMeta, 'X-Pleo-Mime': mime,
+  } });
+}
+
 export async function render(root) {
   let filter = 'all';
   const uploadInput = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp', multiple: true, style: 'display:none', onchange: () => uploadRefs(uploadInput.files) });
@@ -136,15 +146,7 @@ export async function render(root) {
     for (const f of files) {
       try {
         const buf = await f.arrayBuffer();
-        // Moderation pre-check happens before encryption (server can't see
-        // the ciphertext later); only runs when the toggle is on.
-        const mod = await api('/api/moderate', { method: 'POST', body: { image_b64: bufToB64(buf) } });
-        if (mod.enabled && !mod.allowed) { toast(`${f.name}: blocked by moderation`, 'error'); continue; }
-        const encMeta = await encryptJSON({ name: f.name, type: f.type, uploaded: Date.now() });
-        const enc = await encryptBytes(buf);
-        await api('/api/assets', { method: 'POST', body: enc, headers: {
-          'X-Pleo-Kind': 'reference', 'X-Pleo-Meta': encMeta, 'X-Pleo-Mime': f.type || 'image/png',
-        } });
+        await saveReferenceAsset(buf, f.name, f.type || 'image/png');
         toast(`${f.name} uploaded (encrypted)`, 'success');
       } catch (e) {
         toast(`${f.name}: ${e.message}`, 'error');

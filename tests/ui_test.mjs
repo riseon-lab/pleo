@@ -140,6 +140,20 @@ await page.locator('.video-source-actions input[type=file]').setInputFiles({
 });
 await page.waitForFunction(() => document.querySelector('.video-output-line')?.textContent.includes('624×624'));
 check('Wan derives output from source aspect', (await page.locator('.video-output-line').textContent()).includes('624×624'));
+await page.waitForFunction(async () => {
+  const token = sessionStorage.getItem('pleo-token');
+  const response = await fetch('/api/assets', { headers: { Authorization: `Bearer ${token}` } });
+  return (await response.json()).assets.filter(a => a.kind === 'reference').length === 1;
+});
+await page.locator('.video-source-actions input[type=file]').setInputFiles({
+  name: 'replacement.png', mimeType: 'image/png', buffer: tinyPng(3),
+});
+await page.waitForFunction(async () => {
+  const token = sessionStorage.getItem('pleo-token');
+  const response = await fetch('/api/assets', { headers: { Authorization: `Bearer ${token}` } });
+  return (await response.json()).assets.filter(a => a.kind === 'reference').length === 2;
+});
+check('replacing a local reference keeps both encrypted assets', true);
 await page.click('.video-tier button:has-text("720p")');
 check('Wan 720p quality tier derives its larger output', (await page.locator('.video-output-line').textContent()).includes('960×960'));
 await page.click('.video-tier button:has-text("Portrait 9:16")');

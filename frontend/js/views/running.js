@@ -3,7 +3,7 @@ import { api, apiBlob, onEvent } from '../api.js';
 import { encryptBytes, encryptJSON } from '../crypto.js';
 import { getParams, saveParams, getLoraStack, saveLoraStack, getUI, saveUI } from '../state.js';
 import { h, clear, toast, modal, lightbox, confirmModal, fmtBytes } from '../ui.js';
-import { assetMime, decryptedAssetURL, evictDecryptedAssetURL } from './assets.js';
+import { assetMime, decryptedAssetURL, evictDecryptedAssetURL, saveReferenceAsset } from './assets.js';
 
 // FHD presets are snapped to the models' 16px latent grid (1080 → 1072).
 const PRESETS = [
@@ -353,11 +353,11 @@ export async function render(root) {
     if (file.size > MAX_SOURCE_BYTES) return toast('Start image must be 32 MB or smaller', 'error');
     try {
       const bytes = await file.arrayBuffer();
-      await setSource(bytes, file.name, mime);
-    } catch (e) { toast(`Could not read image: ${e.message}`, 'error'); }
+      await setSource(bytes, file.name, mime, null, true);
+    } catch (e) { toast(`Could not use image: ${e.message}`, 'error'); }
   }
 
-  async function setSource(bytes, name, mime, existingURL = null) {
+  async function setSource(bytes, name, mime, existingURL = null, save = false) {
     const url = existingURL || URL.createObjectURL(new Blob([bytes], { type: mime }));
     let dimensions;
     try {
@@ -369,6 +369,7 @@ export async function render(root) {
           throw new Error('Image aspect ratio is too extreme for Wan video');
         }
       }
+      if (save) await saveReferenceAsset(bytes, name, mime);
     }
     catch (e) {
       if (!existingURL) URL.revokeObjectURL(url);
@@ -382,6 +383,7 @@ export async function render(root) {
     };
     renderVideoSource();
     syncAspect();
+    if (save) toast(`${name} saved to Assets (encrypted)`, 'success');
   }
 
   async function chooseSourceAsset() {
