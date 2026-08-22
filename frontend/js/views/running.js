@@ -803,8 +803,8 @@ function normalizeStack(stack, defaults = {}) {
   return (stack || []).map(l => ({
     enabled: true,
     strength: 1.0,
-    high_strength: Number(defaults.high_strength ?? 0.7),
-    low_strength: Number(defaults.low_strength ?? 0.5),
+    high_strength: Number(defaults?.high_strength ?? 0.7),
+    low_strength: Number(defaults?.low_strength ?? 0.5),
     ...l,
   }));
 }

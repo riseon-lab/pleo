@@ -43,6 +43,9 @@ const browser = await chromium.launch(process.env.PLEO_CHROMIUM_PATH
   ? { executablePath: process.env.PLEO_CHROMIUM_PATH }
   : {});
 const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
+await page.addInitScript(() => localStorage.setItem('pleo-loras:z-image-base', JSON.stringify([
+  { file: 'saved-disabled.safetensors', strength: 0.8, enabled: false },
+])));
 const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(String(e)));
 page.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()); });
@@ -60,6 +63,8 @@ check('entered app after signup', true);
 
 // ---- running view: generate ----
 await page.waitForSelector('.run-layout', { timeout: 10000 });
+check('saved non-Wan LoRA loads when model defaults are null',
+  (await page.locator('.lora-chip').textContent()).includes('saved-disabled.safetensors'));
 await page.fill('textarea[placeholder="Prompt…"]', 'a lighthouse at dusk, oil painting');
 await page.fill('.grid2 label:has(span:text("Steps")) input', '4');
 await page.selectOption('select:below(span:text("Resolution"))', 'Portrait 832 × 1216');
