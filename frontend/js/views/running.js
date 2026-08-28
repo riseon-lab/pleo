@@ -16,8 +16,6 @@ const PRESETS = [
 ];
 
 const WAN_VIDEO = {
-  steps: 4,
-  cfg: 1,
   fpsOptions: [12, 16, 20, 24],
   secondsOptions: [3, 4, 5, 6, 7, 8],
   tiers: {
@@ -30,7 +28,9 @@ const WAN_VIDEO = {
   },
 };
 const SOURCE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
+const VIDEO_MIMES = new Set(['video/mp4']);
 const MAX_SOURCE_BYTES = 32 * 1024 * 1024;
+const MAX_SOURCE_VIDEO_BYTES = 64 * 1024 * 1024;
 const collectingResults = new Set();
 
 export async function render(root) {
@@ -45,7 +45,8 @@ export async function render(root) {
   let model = models.find(m => m.id === modelId);
   let params = getParams(modelId, defaultsOf(model));
   let loraStack = normalizeStack(getLoraStack(modelId), model.lora_defaults);
-  let refFile = null; // transient plaintext source for edit/I2V models
+  let refFile = null; // transient plaintext reference image
+  let drivingFile = null; // transient plaintext driving video
   let videoTier = params.video_tier || model.defaults?.video_tier || '480p';
   let videoAspect = params.video_aspect || model.defaults?.video_aspect || 'source';
   let videoFps = params.fps || model.defaults?.fps || 16;
@@ -72,7 +73,7 @@ export async function render(root) {
   const promptField = h('label', { class: 'field' }, h('span', {}, 'Prompt'), prompt, promptHelp);
   const negative = h('textarea', { placeholder: 'Negative prompt (optional)', style: 'min-height:48px', oninput: persist });
   const negativeField = h('label', { class: 'field' }, h('span', {}, 'Negative prompt'), negative);
-  const steps = num({ min: 1, max: 200, step: 1 });
+  const steps = num({ min: 1, max: 200, step: 1, oninput: () => { persist(); renderVideoTiming(); } });
   const cfg = num({ min: 0, max: 30, step: 0.1 });
   const seed = num({ min: -1, max: 2147483647, step: 1 });
   const width = num({ min: 64, max: 2048, step: 8, oninput: () => { presetSel.value = 'custom'; persist(); syncAspect(); } });
@@ -122,12 +123,40 @@ export async function render(root) {
       if (f) await useSourceFile(f);
     },
   }, videoSourceImg, videoSourceEmpty);
+  const videoSourceLabel = h('span', {}, 'Start image');
+  const chooseImageBtn = h('button', { class: 'btn ghost small', onclick: () => videoInput.click() }, 'Choose image');
   const videoSourceField = h('div', { class: 'field' },
-    h('span', {}, 'Start image'), videoSourceDrop, videoSourceMeta,
+    videoSourceLabel, videoSourceDrop, videoSourceMeta,
     h('div', { class: 'row gap video-source-actions' },
-      h('button', { class: 'btn ghost small', onclick: () => videoInput.click() }, 'Choose image'),
+      chooseImageBtn,
       h('button', { class: 'btn ghost small', onclick: chooseSourceAsset }, 'Choose from Assets'),
       videoInput));
+
+  const drivingInput = h('input', { type: 'file', accept: '.mp4,video/mp4', hidden: true, onchange: async () => {
+    const f = drivingInput.files[0];
+    if (f) await useDrivingFile(f);
+  } });
+  const drivingPreview = h('video', { muted: true, playsinline: true, preload: 'metadata', hidden: true });
+  const drivingEmpty = h('div', { class: 'video-source-empty' }, 'Drop in the video that guides motion and timing');
+  const drivingMeta = h('p', { class: 'muted video-source-meta' }, 'MP4 · up to 64 MB');
+  const drivingLabel = h('span', {}, 'Driving video');
+  const drivingDrop = h('div', {
+    class: 'video-source-drop', onclick: () => drivingInput.click(),
+    ondragover: e => { e.preventDefault(); drivingDrop.classList.add('dragging'); },
+    ondragleave: () => drivingDrop.classList.remove('dragging'),
+    ondrop: async e => {
+      e.preventDefault();
+      drivingDrop.classList.remove('dragging');
+      const f = [...e.dataTransfer.files].find(file => VIDEO_MIMES.has(sourceMime(file)));
+      if (f) await useDrivingFile(f);
+    },
+  }, drivingPreview, drivingEmpty);
+  const drivingField = h('div', { class: 'field', hidden: true },
+    drivingLabel, drivingDrop, drivingMeta,
+    h('div', { class: 'row gap video-source-actions' },
+      h('button', { class: 'btn ghost small', onclick: () => drivingInput.click() }, 'Choose video'),
+      h('button', { class: 'btn ghost small', onclick: chooseDrivingAsset }, 'Choose from Assets'),
+      drivingInput));
 
   const aspectButtons = h('div', { class: 'video-tier', role: 'group', 'aria-label': 'Video framing' }, Object.entries(WAN_VIDEO.aspects).map(([aspect, item]) =>
     h('button', { onclick: () => { videoAspect = aspect; renderVideoAspect(); persist(); syncAspect(); } },
@@ -144,12 +173,14 @@ export async function render(root) {
     h('button', { onclick: () => { videoSeconds = seconds; renderVideoTiming(); persist(); } }, `${seconds}s`)));
   const videoSecondsField = h('div', { class: 'field' }, h('span', {}, 'Duration'), secondsButtons);
   const videoOutputLine = h('p', { class: 'muted video-output-line' }, 'Output follows the start image aspect ratio.');
+  const wanInfoTitle = h('strong', {}, 'LightX2V 720p distilled experts');
+  const wanInfoDescription = h('p', {}, '2026 high-noise + low-noise quality checkpoints');
   const wanTimingInfo = h('p', {});
   const wanInfo = h('div', { class: 'wan-baked' },
-    h('div', { class: 'row between' }, h('strong', {}, 'LightX2V 720p distilled experts'), h('span', { class: 'badge ok' }, 'baked')),
-    h('p', {}, '2026 high-noise + low-noise quality checkpoints'),
+    h('div', { class: 'row between' }, wanInfoTitle, h('span', { class: 'badge ok' }, 'baked')),
+    wanInfoDescription,
     wanTimingInfo);
-  const wanControls = h('div', { hidden: true }, videoSourceField, videoAspectField, videoTierField,
+  const wanControls = h('div', { hidden: true }, videoSourceField, drivingField, videoAspectField, videoTierField,
     videoSecondsField, videoFpsField, videoOutputLine, wanInfo);
 
   const loraSummary = h('div', { class: 'lora-chiprow' });
@@ -229,7 +260,9 @@ export async function render(root) {
   }
 
   function syncInputs() {
-    const isVideo = model.kind === 'img2video';
+    const isVideo = isVideoKind(model.kind);
+    const isDriven = isDrivenKind(model.kind);
+    const isLockedVideo = model.kind === 'img2video' || model.kind === 'motion2video';
     prompt.value = params.prompt ?? '';
     negative.value = params.negative ?? '';
     steps.value = params.steps ?? 4;
@@ -239,41 +272,62 @@ export async function render(root) {
     height.value = params.height ?? 1024;
     videoTier = params.video_tier || model.defaults?.video_tier || '480p';
     videoAspect = params.video_aspect || model.defaults?.video_aspect || 'source';
-    videoFps = WAN_VIDEO.fpsOptions.includes(+params.fps) ? +params.fps : model.defaults?.fps || 16;
+    videoFps = model.kind === 'img2video' && WAN_VIDEO.fpsOptions.includes(+params.fps)
+      ? +params.fps : model.video?.output_fps || model.defaults?.fps || 16;
     const savedSeconds = params.video_seconds || Math.round(((params.num_frames || 81) - 1) / videoFps);
     videoSeconds = WAN_VIDEO.secondsOptions.includes(+savedSeconds) ? +savedSeconds : 5;
     const p = PRESETS.find(p => p.w === +width.value && p.h === +height.value);
     presetSel.value = p ? p.label : 'custom';
     wanControls.hidden = !isVideo;
     promptHelp.hidden = !isVideo;
-    negativeField.hidden = isVideo;
-    stepCfgFields.hidden = isVideo;
+    promptHelp.textContent = model.kind === 'img2video'
+      ? 'Describe the action and camera movement. This distilled CFG 1 profile does not use a negative prompt.'
+      : model.kind === 'motion2video'
+        ? 'Describe the reference character and desired setting; the driving video supplies motion and timing.'
+        : 'Describe the finished shot, including the subject, environment, lighting and style.';
+    negativeField.hidden = isLockedVideo;
+    stepCfgFields.hidden = isLockedVideo;
     resolutionField.hidden = isVideo;
     dimensionFields.hidden = isVideo;
     refField.style.display = model.kind === 'edit' ? '' : 'none';
-    loraField.hidden = false;
-    loraTitle.textContent = isVideo ? `Wan LoRA stack · up to ${wanLoraDefaults(model).maxStack}` : 'LoRA stack';
-    loraHelp.hidden = !isVideo;
+    drivingField.hidden = !isDriven;
+    videoSecondsField.hidden = isDriven;
+    videoFpsField.hidden = isDriven;
+    loraField.hidden = isDriven;
+    loraTitle.textContent = model.kind === 'img2video' ? `Wan LoRA stack · up to ${wanLoraDefaults(model).maxStack}` : 'LoRA stack';
+    loraHelp.hidden = model.kind !== 'img2video';
+    videoSourceLabel.textContent = model.kind === 'img2video' ? 'Start image' : 'Reference image';
+    chooseImageBtn.textContent = model.kind === 'img2video' ? 'Choose image' : 'Choose reference';
+    drivingLabel.textContent = model.kind === 'video2video' ? 'Source video' : 'Driving video';
+    drivingEmpty.textContent = model.kind === 'video2video'
+      ? 'Drop in the video you want to recreate' : 'Drop in the video that guides motion and timing';
+    wanInfoTitle.textContent = model.kind === 'img2video' ? 'LightX2V 720p distilled experts'
+      : model.kind === 'motion2video' ? 'Wan Animate 2 distilled' : 'VACE 14B';
+    wanInfoDescription.textContent = model.kind === 'img2video' ? '2026 high-noise + low-noise quality checkpoints'
+      : model.kind === 'motion2video' ? 'Raw-video performance transfer · 10-step distilled profile'
+        : 'Source-guided whole-shot recreation · reference image conditioned';
     genBtn.textContent = isVideo ? 'Generate video' : 'Generate';
     previewEmpty.textContent = isVideo
-      ? 'Your video appears here. The start frame stays visible while Wan works.'
+      ? `Your video appears here. ${isDriven ? 'The guide stays local and transient while Wan works.' : 'The start frame stays visible while Wan works.'}`
       : 'Generations appear here. Live noise previews stream in step by step.';
     renderVideoTier();
     renderVideoAspect();
     renderVideoTiming();
     renderVideoSource();
+    renderDrivingSource();
     renderLoraSummary();
     syncAspect();
   }
 
   function syncAspect() {
-    if (model.kind === 'img2video') {
-      previewBox.style.aspectRatio = videoAspect === '9:16' ? '9 / 16' : refFile?.width && refFile?.height
-        ? `${refFile.width} / ${refFile.height}` : '16 / 9';
+    if (isVideoKind(model.kind)) {
+      const dimensions = videoSourceDimensions();
+      previewBox.style.aspectRatio = videoAspect === '9:16' ? '9 / 16' : dimensions
+        ? `${dimensions.width} / ${dimensions.height}` : '16 / 9';
     } else {
       previewBox.style.aspectRatio = `${+width.value || 16} / ${+height.value || 9}`;
     }
-    previewImg.style.objectFit = model.kind === 'img2video' && videoAspect === '9:16' ? 'cover' : 'contain';
+    previewImg.style.objectFit = isVideoKind(model.kind) && videoAspect === '9:16' ? 'cover' : 'contain';
   }
 
   function renderVideoTier() {
@@ -293,7 +347,16 @@ export async function render(root) {
     renderVideoSource();
   }
 
-  function videoFrameCount() { return videoSeconds * videoFps + 1; }
+  function videoFrameCount() {
+    if (!isDrivenKind(model.kind)) return videoSeconds * videoFps + 1;
+    const cfg = model.video || {};
+    const maxSeconds = cfg.max_source_seconds || 5;
+    const seconds = Math.min(drivingFile?.duration || maxSeconds, maxSeconds);
+    const multiple = cfg.frame_multiple || 1;
+    const maxFrames = cfg.max_frames || Math.round(maxSeconds * videoFps) + 1;
+    return Math.min(maxFrames, Math.max(multiple + 1,
+      Math.floor(Math.max(1, Math.round(seconds * videoFps)) / multiple) * multiple + 1));
+  }
 
   function renderVideoTiming() {
     [...fpsButtons.children].forEach((button, i) => {
@@ -307,8 +370,15 @@ export async function render(root) {
       button.setAttribute('aria-pressed', selected);
     });
     const frames = videoFrameCount();
-    wanTimingInfo.textContent = `CFG 1 / 1 · 4 steps · ${frames} frames · ${videoFps} fps · ${videoSeconds}s${frames > 81 ? ' · long clip: more VRAM' : ''}`;
-    if (model.kind === 'img2video') genBtn.textContent = `Generate ${videoSeconds}s video`;
+    if (model.kind === 'img2video') {
+      wanTimingInfo.textContent = `CFG 1 / 1 · 4 steps · ${frames} frames · ${videoFps} fps · ${videoSeconds}s${frames > 81 ? ' · long clip: more VRAM' : ''}`;
+      genBtn.textContent = `Generate ${videoSeconds}s video`;
+    } else if (isDrivenKind(model.kind)) {
+      const maxSeconds = model.video?.max_source_seconds || 5;
+      const stepCount = model.kind === 'video2video' ? +steps.value : model.defaults.steps;
+      wanTimingInfo.textContent = `${stepCount} steps · ${frames} frames · ${videoFps} fps · source ${drivingFile ? `${Math.min(drivingFile.duration, maxSeconds).toFixed(1)}s` : `up to ${maxSeconds}s`}`;
+      genBtn.textContent = 'Generate guided video';
+    }
   }
 
   function renderVideoSource() {
@@ -320,7 +390,7 @@ export async function render(root) {
       videoSourceMeta.textContent = 'JPG, PNG or WebP';
       videoOutputLine.textContent = videoAspect === '9:16'
         ? `${videoTier} tier · portrait 9:16 · centre crop`
-        : 'Output follows the start image aspect ratio.';
+        : `Output follows the ${model.kind === 'video2video' ? 'driving video' : model.kind === 'motion2video' ? 'reference image' : 'start image'} aspect ratio.`;
       return;
     }
     const size = wanOutputSize();
@@ -330,9 +400,14 @@ export async function render(root) {
       : `${videoTier} tier · source aspect preserved`;
   }
 
+  function videoSourceDimensions() {
+    return model.kind === 'video2video' ? drivingFile : refFile;
+  }
+
   function wanOutputSize() {
-    if (videoAspect !== '9:16' && (!refFile?.width || !refFile?.height)) return null;
-    return wanOutputSizeFor(refFile?.width || 9, refFile?.height || 16);
+    const source = videoSourceDimensions();
+    if (videoAspect !== '9:16' && (!source?.width || !source?.height)) return null;
+    return wanOutputSizeFor(source?.width || 9, source?.height || 16);
   }
 
   function wanOutputSizeFor(sourceWidth, sourceHeight) {
@@ -350,7 +425,7 @@ export async function render(root) {
   async function useSourceFile(file) {
     const mime = sourceMime(file);
     if (!SOURCE_MIMES.has(mime)) return toast('Choose a JPG, PNG or WebP image', 'error');
-    if (file.size > MAX_SOURCE_BYTES) return toast('Start image must be 32 MB or smaller', 'error');
+    if (file.size > MAX_SOURCE_BYTES) return toast('Reference image must be 32 MB or smaller', 'error');
     try {
       const bytes = await file.arrayBuffer();
       await setSource(bytes, file.name, mime, null, true);
@@ -363,7 +438,7 @@ export async function render(root) {
     try {
       dimensions = await imageDimensions(url);
       if (dimensions.width * dimensions.height > 64_000_000) throw new Error('Image has too many pixels');
-      if (model.kind === 'img2video') {
+      if (isVideoKind(model.kind) && model.kind !== 'video2video') {
         const size = wanOutputSizeFor(dimensions.width, dimensions.height);
         if (Math.min(size.width, size.height) < 64 || Math.max(size.width, size.height) > 2048) {
           throw new Error('Image aspect ratio is too extreme for Wan video');
@@ -392,7 +467,7 @@ export async function render(root) {
       const images = assets.filter(a => SOURCE_MIMES.has(assetMime(a)));
       if (!images.length) return toast('No image assets available', 'error');
       const grid = h('div', { class: 'asset-grid source-asset-grid' });
-      const picker = modal('Choose start image', grid, { wide: true });
+      const picker = modal(model.kind === 'img2video' ? 'Choose start image' : 'Choose reference image', grid, { wide: true });
       for (const a of images.slice(0, 60)) {
         const img = h('img', { alt: a.kind, loading: 'lazy' });
         const tile = h('button', { class: 'asset-tile source-asset-tile', onclick: async () => {
@@ -405,6 +480,80 @@ export async function render(root) {
         } }, img, h('span', { class: 'badge tag' }, a.kind));
         grid.append(tile);
         decryptedAssetURL(a.id, assetMime(a)).then(url => { img.src = url; }).catch(() => tile.remove());
+      }
+    } catch (e) { toast(e.message, 'error'); }
+  }
+
+  function renderDrivingSource() {
+    const ready = Boolean(drivingFile?.url);
+    drivingPreview.hidden = !ready;
+    drivingEmpty.hidden = ready;
+    if (ready && drivingPreview.src !== drivingFile.url) {
+      drivingPreview.src = drivingFile.url;
+      drivingPreview.load();
+    }
+    const maxSeconds = model.video?.max_source_seconds || 5;
+    drivingMeta.textContent = drivingFile
+      ? `${drivingFile.name} · ${drivingFile.width}×${drivingFile.height} · ${drivingFile.duration.toFixed(1)}s${drivingFile.duration > maxSeconds ? ` · first ${maxSeconds}s used` : ''}`
+      : `MP4 · up to 64 MB · first ${maxSeconds}s used`;
+    renderVideoTiming();
+    renderVideoSource();
+    syncAspect();
+  }
+
+  async function useDrivingFile(file) {
+    const mime = sourceMime(file);
+    if (!VIDEO_MIMES.has(mime)) return toast('Choose an MP4 video', 'error');
+    if (file.size > MAX_SOURCE_VIDEO_BYTES) return toast('Driving video must be 64 MB or smaller', 'error');
+    try {
+      await setDriving(await file.arrayBuffer(), file.name, mime, null, true);
+    } catch (e) { toast(`Could not use video: ${e.message}`, 'error'); }
+  }
+
+  async function setDriving(bytes, name, mime, existingURL = null, save = false) {
+    const url = existingURL || URL.createObjectURL(new Blob([bytes], { type: mime }));
+    let dimensions;
+    try {
+      dimensions = await videoDimensions(url);
+      if (dimensions.width * dimensions.height > 16_777_216 || Math.max(dimensions.width, dimensions.height) > 4096) {
+        throw new Error('Video resolution is too large');
+      }
+      if (model.kind === 'video2video') {
+        const size = wanOutputSizeFor(dimensions.width, dimensions.height);
+        if (Math.min(size.width, size.height) < 64 || Math.max(size.width, size.height) > 2048) {
+          throw new Error('Video aspect ratio is too extreme for VACE');
+        }
+      }
+      if (save) await saveReferenceAsset(bytes, name, mime);
+    } catch (e) {
+      if (!existingURL) URL.revokeObjectURL(url);
+      throw e;
+    }
+    if (drivingFile?.ownedURL && drivingFile.url) URL.revokeObjectURL(drivingFile.url);
+    drivingFile = { b64: bufToB64(bytes), name, mime, url, ...dimensions, ownedURL: !existingURL };
+    renderDrivingSource();
+    if (save) toast(`${name} saved to Assets (encrypted)`, 'success');
+  }
+
+  async function chooseDrivingAsset() {
+    try {
+      const { assets } = await api('/api/assets');
+      const videos = assets.filter(a => VIDEO_MIMES.has(assetMime(a)));
+      if (!videos.length) return toast('No MP4 assets available', 'error');
+      const grid = h('div', { class: 'asset-grid source-asset-grid' });
+      const picker = modal('Choose driving video', grid, { wide: true });
+      for (const a of videos.slice(0, 60)) {
+        const video = h('video', { muted: true, playsinline: true, preload: 'metadata', 'aria-label': 'Driving video' });
+        const tile = h('button', { class: 'asset-tile source-asset-tile', onclick: async () => {
+          try {
+            const url = video.src || await decryptedAssetURL(a.id, assetMime(a));
+            const bytes = await (await fetch(url)).arrayBuffer();
+            await setDriving(bytes, `asset-${a.id}`, assetMime(a), url);
+            picker.close();
+          } catch (e) { toast(`Could not use asset: ${e.message}`, 'error'); }
+        } }, video, h('span', { class: 'badge tag' }, 'video'));
+        grid.append(tile);
+        decryptedAssetURL(a.id, assetMime(a)).then(url => { video.src = url; }).catch(() => tile.remove());
       }
     } catch (e) { toast(e.message, 'error'); }
   }
@@ -515,12 +664,14 @@ export async function render(root) {
 
   async function submit() {
     persist();
-    const isVideo = model.kind === 'img2video';
+    const isVideo = isVideoKind(model.kind);
+    const isDriven = isDrivenKind(model.kind);
     const enabledLoras = loraStack.filter(l => l.enabled);
     if (!prompt.value.trim()) { toast('Enter a prompt first', 'error'); return; }
     if (model.kind === 'edit' && !refFile) { toast('This model needs a reference image', 'error'); return; }
-    if (isVideo && !refFile) { toast('Wan needs a start image', 'error'); return; }
-    if (isVideo && enabledLoras.length > wanLoraDefaults(model).maxStack) {
+    if (isVideo && !refFile) { toast(model.kind === 'img2video' ? 'Wan needs a start image' : 'This model needs a reference image', 'error'); return; }
+    if (isDriven && !drivingFile) { toast('This model needs a driving video', 'error'); return; }
+    if (model.kind === 'img2video' && enabledLoras.length > wanLoraDefaults(model).maxStack) {
       toast(`Wan supports at most ${wanLoraDefaults(model).maxStack} stacked LoRAs`, 'error');
       return;
     }
@@ -545,23 +696,23 @@ export async function render(root) {
         height: model.defaults?.height || 480,
       };
       if (isVideo && (Math.min(videoSize.width, videoSize.height) < 64 || Math.max(videoSize.width, videoSize.height) > 2048)) {
-        toast('Start image aspect ratio is too extreme for Wan video', 'error');
+        toast('Source aspect ratio is too extreme for Wan video', 'error');
         return;
       }
       const body = isVideo ? {
         model_id: modelId,
         prompt: prompt.value,
-        negative_prompt: '',
-        steps: WAN_VIDEO.steps,
-        cfg: WAN_VIDEO.cfg,
+        negative_prompt: model.kind === 'video2video' ? negative.value : '',
+        steps: model.kind === 'video2video' ? +steps.value : model.defaults.steps,
+        cfg: model.kind === 'video2video' ? +cfg.value : model.defaults.cfg,
         width: videoSize.width,
         height: videoSize.height,
         seed: +seed.value,
-        loras: enabledLoras.map(l => ({
+        loras: model.kind === 'img2video' ? enabledLoras.map(l => ({
           file: l.file,
           high_strength: l.high_strength,
           low_strength: l.low_strength,
-        })),
+        })) : [],
         ref_image_b64: refFile.b64,
         video_tier: videoTier,
         video_aspect: videoAspect,
@@ -577,10 +728,12 @@ export async function render(root) {
         loras: enabledLoras.map(l => ({ file: l.file, strength: l.strength })),
       };
       if (model.kind === 'edit' && refFile) body.ref_image_b64 = refFile.b64;
+      if (isDriven) body.ref_video_b64 = drivingFile.b64;
       if (isVideo) {
         if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
         resultObjectURL = null;
-        showMedia(refFile.url, refFile.mime, videoSize.width, videoSize.height);
+        const guide = isDriven ? drivingFile : refFile;
+        showMedia(guide.url, guide.mime, videoSize.width, videoSize.height);
       }
       const res = await api('/api/generate', { method: 'POST', body });
       toast(res.position > 1 ? `Queued (position ${res.position})` : `${isVideo ? 'Video generation' : 'Generation'} started`);
@@ -632,7 +785,7 @@ export async function render(root) {
 
   function renderQueue(q) {
     clear(queueList);
-    if (modelKind(q.current?.model_id) === 'img2video') {
+    if (isVideoKind(modelKind(q.current?.model_id))) {
       setPreviewAspect(q.current.width, q.current.height);
     }
     const rows = [];
@@ -680,7 +833,7 @@ export async function render(root) {
   function modelName(id) { return (models.find(m => m.id === id) || { name: id }).name; }
   function modelKind(id) { return (models.find(m => m.id === id) || {}).kind; }
   function jobMime(job) {
-    return job.mime || job.output_mime || (modelKind(job.model_id) === 'img2video' ? 'video/mp4' : 'image/png');
+    return job.mime || job.output_mime || (isVideoKind(modelKind(job.model_id)) ? 'video/mp4' : 'image/png');
   }
 
   async function collectResult(job) {
@@ -755,7 +908,7 @@ export async function render(root) {
       setStatus(stage || `Step ${ev.step} / ${ev.total}`, { cancellable: true, progress: pct });
     } else if (ev.type === 'job') {
       const j = ev.job;
-      if (modelKind(j.model_id) === 'img2video' && j.status !== 'queued' && j.width > 0 && j.height > 0) {
+      if (isVideoKind(modelKind(j.model_id)) && j.status !== 'queued' && j.width > 0 && j.height > 0) {
         setPreviewAspect(j.width, j.height);
       }
       if (j.status === 'queued') refreshQueue();
@@ -779,6 +932,10 @@ export async function render(root) {
     previewVideo.load();
     if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
     if (refFile?.ownedURL && refFile.url) URL.revokeObjectURL(refFile.url);
+    drivingPreview.pause();
+    drivingPreview.removeAttribute('src');
+    drivingPreview.load();
+    if (drivingFile?.ownedURL && drivingFile.url) URL.revokeObjectURL(drivingFile.url);
   };
 }
 
@@ -818,9 +975,28 @@ function imageDimensions(url) {
   });
 }
 
+function videoDimensions(url) {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => {
+      if (!video.videoWidth || !video.videoHeight || !Number.isFinite(video.duration) || video.duration <= 0) {
+        reject(new Error('Unsupported or damaged video'));
+      } else {
+        resolve({ width: video.videoWidth, height: video.videoHeight, duration: video.duration });
+      }
+    };
+    video.onerror = () => reject(new Error('Unsupported or damaged MP4 video'));
+    video.src = url;
+  });
+}
+
+function isVideoKind(kind) { return ['img2video', 'motion2video', 'video2video'].includes(kind); }
+function isDrivenKind(kind) { return kind === 'motion2video' || kind === 'video2video'; }
+
 function sourceMime(file) {
-  if (SOURCE_MIMES.has(file.type)) return file.type;
-  return ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp' })[
+  if (SOURCE_MIMES.has(file.type) || VIDEO_MIMES.has(file.type)) return file.type;
+  return ({ jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', webp: 'image/webp', mp4: 'video/mp4' })[
     String(file.name || '').split('.').pop().toLowerCase()
   ] || '';
 }

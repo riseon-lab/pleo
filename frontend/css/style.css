@@ -228,10 +228,10 @@ input, select, textarea { max-width: 100%; }
   cursor: pointer; transition: border-color .12s, background .12s;
 }
 .video-source-drop:hover, .video-source-drop.dragging { border-color: var(--accent); background: var(--surface-muted); }
-.video-source-drop img { width: 100%; max-height: 240px; object-fit: contain; display: block; background: var(--dark); }
+.video-source-drop img, .video-source-drop video { width: 100%; max-height: 240px; object-fit: contain; display: block; background: var(--dark); }
 .video-source-drop.portrait { width: 135px; min-height: 240px; aspect-ratio: 9 / 16; margin-inline: auto; }
 .video-source-drop.portrait img { height: 100%; max-height: none; object-fit: cover; }
-.video-source-drop img[hidden], .video-source-empty[hidden] { display: none; }
+.video-source-drop img[hidden], .video-source-drop video[hidden], .video-source-empty[hidden] { display: none; }
 .video-source-empty { max-width: 210px; padding: 28px 16px; color: var(--ink-soft); text-align: center; }
 .video-source-meta, .video-output-line { margin: 6px 0 8px; }
 .video-source-actions { flex-wrap: wrap; }

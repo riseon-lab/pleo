@@ -29,6 +29,7 @@ import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 CONFIG: dict = {}
+VIDEO_KINDS = {"img2video", "motion2video", "video2video"}
 STATE = {
     "loaded": False,
     "pipe": None,
@@ -130,14 +131,16 @@ def mock_generate(params: dict, emit) -> dict:
         time.sleep(0.35)
         preview = _mock_frame(pw, ph, seed, params["prompt"], step / steps)
         stage = ("Planning motion · high noise" if step <= 2 else "Refining detail · low noise") \
-            if CONFIG["model"]["kind"] == "img2video" else None
+            if CONFIG["model"]["kind"] in VIDEO_KINDS else None
         emit({"type": "step", "step": step, "total": steps, "stage": stage,
               "preview_b64": base64.b64encode(preview).decode()})
-    if CONFIG["model"]["kind"] == "img2video":
+    if CONFIG["model"]["kind"] in VIDEO_KINDS:
         moderation = _mock_frame(192, 64, seed, params["prompt"], 1.0)
         emit({"type": "step", "step": steps, "total": steps, "stage": "Encoding MP4…"})
         return {"type": "done", "media_b64": MOCK_MP4_B64, "mime": "video/mp4",
-                "moderation_b64": base64.b64encode(moderation).decode(), "seed": seed}
+                "moderation_b64": base64.b64encode(moderation).decode(), "seed": seed,
+                "width": params["width"], "height": params["height"],
+                "fps": params.get("fps", 16), "num_frames": params.get("num_frames", 1)}
     rgb = _png_rgb_rerender(w, h, seed, params["prompt"])
     up = _upscale_nearest(rgb, w, h, tw, th) if (w, h) != (tw, th) else rgb
     final = write_png(tw, th, up)
@@ -256,6 +259,48 @@ def _load_wan(model: dict):
     return pipe
 
 
+def _load_wan_animate(model: dict):
+    import torch
+    from diffusers import ModularPipeline
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("Wan Animate 2 requires a CUDA GPU")
+    total_gib = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
+    if total_gib + 1 < model.get("min_cuda_memory_gb", 80):
+        raise RuntimeError(f"Wan Animate 2 needs an ~80 GB GPU; detected {total_gib:.1f} GB")
+    pipe = ModularPipeline.from_pretrained(model["repo_id"])
+    pipe.load_components(dtype=torch.bfloat16)
+    # The reference KV cache and transformer do not fit together on an 80 GB
+    # card. Diffusers' block streaming is the model's documented inference path.
+    pipe.transformer.enable_group_offload(
+        onload_device=torch.device("cuda"), offload_device=torch.device("cpu"),
+        offload_type="block_level", use_stream=True)
+    pipe.text_encoder.to("cuda")
+    pipe.image_encoder.to("cuda")
+    pipe.vae.to("cuda")
+    pipe.transformer.compile_repeated_blocks(fullgraph=False)
+    return pipe
+
+
+def _load_vace(model: dict):
+    import torch
+    from diffusers import AutoencoderKLWan, WanVACEPipeline
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("Wan VACE 14B requires a CUDA GPU")
+    total_gib = torch.cuda.get_device_properties(0).total_memory / 2 ** 30
+    if total_gib + 1 < model.get("min_cuda_memory_gb", 80):
+        raise RuntimeError(f"Wan VACE 14B needs an ~80 GB GPU; detected {total_gib:.1f} GB")
+    vae = AutoencoderKLWan.from_pretrained(
+        model["repo_id"], subfolder="vae", dtype=torch.float32, low_cpu_mem_usage=True)
+    pipe = WanVACEPipeline.from_pretrained(
+        model["repo_id"], vae=vae, dtype=torch.bfloat16, low_cpu_mem_usage=True)
+    pipe.vae.enable_tiling()
+    pipe.vae.enable_slicing()
+    pipe.enable_model_cpu_offload()
+    return pipe
+
+
 def real_load():
     os.environ.setdefault("HF_HOME", CONFIG["hf_home"])
     import torch
@@ -264,6 +309,10 @@ def real_load():
     model = CONFIG["model"]
     if model["kind"] == "img2video":
         pipe = _load_wan(model)
+    elif model["kind"] == "motion2video":
+        pipe = _load_wan_animate(model)
+    elif model["kind"] == "video2video":
+        pipe = _load_vace(model)
     else:
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
         pipe = DiffusionPipeline.from_pretrained(model["repo_id"], torch_dtype=dtype)
@@ -303,7 +352,7 @@ def _step_callback(params: dict, emit, total: int):
         except Exception:
             pass
         stage = None
-        if CONFIG["model"]["kind"] == "img2video":
+        if CONFIG["model"]["kind"] in VIDEO_KINDS:
             stage = "Planning motion · high noise" if step < 2 else "Refining detail · low noise"
             if step + 1 == total:
                 stage = "Decoding video…"
@@ -344,12 +393,21 @@ def _encode_mp4(frames, fps: int, max_bytes: int | None = None) -> bytes:
 
 
 def _moderation_sheet(frames) -> bytes:
+    import numpy as np
     from PIL import Image
+
+    def as_image(frame):
+        if hasattr(frame, "convert"):
+            return frame.convert("RGB")
+        arr = np.asarray(frame)
+        if arr.dtype != np.uint8:
+            arr = np.clip(arr * (255 if arr.max() <= 1.0 else 1), 0, 255).astype(np.uint8)
+        return Image.fromarray(arr).convert("RGB")
 
     picks = [frames[0], frames[len(frames) // 2], frames[-1]]
     sheet = Image.new("RGB", (768, 256), "black")
     for i, frame in enumerate(picks):
-        image = frame.convert("RGB") if hasattr(frame, "convert") else Image.fromarray(frame).convert("RGB")
+        image = as_image(frame)
         image.thumbnail((256, 256))
         sheet.paste(image, (i * 256 + (256 - image.width) // 2, (256 - image.height) // 2))
     buf = io.BytesIO()
@@ -361,6 +419,58 @@ def _wan_required_vram_gib(video_tier: str, num_frames: int, adapter_gib: float)
     base = 78 if video_tier == "720p" else 70
     # ponytail: 60 GiB is the fixed model floor; tune it if measured long-clip peaks disagree.
     return 60 + (base - 60) * max(1, num_frames / 81) + adapter_gib
+
+
+def _decode_video(data: bytes, max_seconds: float, target_fps: int,
+                  target_frames: int | None = None, max_frames: int | None = None):
+    """Decode and uniformly resample a transient MP4 without writing plaintext."""
+    import av
+
+    container = None
+    try:
+        container = av.open(io.BytesIO(data), mode="r")
+        stream = container.streams.video[0]
+        source_fps = float(stream.average_rate or target_fps)
+        if not math.isfinite(source_fps) or source_fps <= 0 or source_fps > 240:
+            source_fps = float(target_fps)
+        decoded = []
+        for frame in container.decode(stream):
+            timestamp = float(frame.pts * frame.time_base) if frame.pts is not None else len(decoded) / source_fps
+            if timestamp > max_seconds:
+                break
+            image = frame.to_image().convert("RGB")
+            if image.width * image.height > 16_777_216 or max(image.size) > 4096:
+                raise RuntimeError("Driving video resolution is too large")
+            decoded.append(image)
+    except RuntimeError:
+        raise
+    except Exception as exc:
+        raise RuntimeError("Driving video must be a readable H.264/H.265 MP4") from exc
+    finally:
+        if container is not None:
+            try:
+                container.close()
+            except Exception:
+                pass
+    if len(decoded) < 2:
+        raise RuntimeError("Driving video must contain at least two frames")
+
+    if target_frames is None:
+        duration = min(max_seconds, (len(decoded) - 1) / source_fps)
+        target_frames = max(2, round(duration * target_fps) + 1)
+    if max_frames is not None:
+        target_frames = min(target_frames, max_frames)
+    indices = [round(i * (len(decoded) - 1) / max(1, target_frames - 1))
+               for i in range(target_frames)]
+    return [decoded[i] for i in indices], target_fps
+
+
+def _output_size(frames) -> tuple[int, int]:
+    first = frames[0]
+    if hasattr(first, "size") and isinstance(first.size, tuple):
+        return first.size
+    shape = first.shape
+    return int(shape[1]), int(shape[0])
 
 
 def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
@@ -435,6 +545,89 @@ def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
             torch.cuda.empty_cache()
 
 
+def _wan_animate_generate(params: dict, emit, seed: int, generator) -> dict:
+    import torch
+    from PIL import Image
+
+    model = CONFIG["model"]
+    video_cfg = model["video"]
+    source = Image.open(io.BytesIO(base64.b64decode(params["ref_image_b64"]))).convert("RGB")
+    driving = []
+    try:
+        emit({"type": "step", "step": 1, "total": 3, "stage": "Preparing driving motion…"})
+        driving, driving_fps = _decode_video(
+            base64.b64decode(params["ref_video_b64"]), video_cfg["max_source_seconds"],
+            video_cfg["output_fps"], target_frames=params["num_frames"],
+            max_frames=video_cfg["max_frames"])
+        if STATE["cancel"].is_set():
+            raise Cancelled()
+        emit({"type": "step", "step": 2, "total": 3, "stage": "Transferring performance…"})
+        videos = STATE["pipe"](
+            image=source, driving_video=driving, driving_video_fps=driving_fps,
+            prompt=params["prompt"], width=params["width"], height=params["height"],
+            generator=generator, output="videos")
+        frames = videos[0]
+        if STATE["cancel"].is_set():
+            raise Cancelled()
+        emit({"type": "step", "step": 3, "total": 3, "stage": "Encoding MP4…"})
+        width, height = _output_size(frames)
+        fps = video_cfg["output_fps"]
+        video = _encode_mp4(frames, fps, CONFIG.get("max_output_bytes"))
+        moderation = _moderation_sheet(frames)
+        return {"type": "done", "media_b64": base64.b64encode(video).decode(), "mime": "video/mp4",
+                "moderation_b64": base64.b64encode(moderation).decode(), "seed": seed,
+                "width": width, "height": height, "fps": fps, "num_frames": len(frames)}
+    finally:
+        source.close()
+        for frame in driving:
+            frame.close()
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
+def _vace_generate(params: dict, emit, seed: int, generator) -> dict:
+    import torch
+    from PIL import Image
+
+    model = CONFIG["model"]
+    video_cfg = model["video"]
+    source = Image.open(io.BytesIO(base64.b64decode(params["ref_image_b64"]))).convert("RGB")
+    frames = []
+    try:
+        frames, fps = _decode_video(
+            base64.b64decode(params["ref_video_b64"]), video_cfg["max_source_seconds"],
+            video_cfg["output_fps"], target_frames=params["num_frames"], max_frames=video_cfg["max_frames"])
+        kwargs = dict(
+            prompt=params["prompt"], video=frames, reference_images=[source],
+            width=params["width"], height=params["height"], num_frames=len(frames),
+            num_inference_steps=params["steps"], guidance_scale=params["cfg"],
+            generator=generator, output_type="np",
+            callback_on_step_end=_step_callback(params, emit, params["steps"]),
+        )
+        if params.get("negative_prompt"):
+            kwargs["negative_prompt"] = params["negative_prompt"]
+        output = STATE["pipe"](**kwargs).frames[0]
+        if STATE["cancel"].is_set():
+            raise Cancelled()
+        emit({"type": "step", "step": params["steps"], "total": params["steps"], "stage": "Encoding MP4…"})
+        width, height = _output_size(output)
+        video = _encode_mp4(output, fps, CONFIG.get("max_output_bytes"))
+        moderation = _moderation_sheet(output)
+        return {"type": "done", "media_b64": base64.b64encode(video).decode(), "mime": "video/mp4",
+                "moderation_b64": base64.b64encode(moderation).decode(), "seed": seed,
+                "width": width, "height": height, "fps": fps, "num_frames": len(output)}
+    finally:
+        source.close()
+        for frame in frames:
+            frame.close()
+        try:
+            STATE["pipe"].maybe_free_model_hooks()
+        except Exception:
+            pass
+        gc.collect()
+        torch.cuda.empty_cache()
+
+
 def real_generate(params: dict, emit) -> dict:
     import torch
 
@@ -448,6 +641,10 @@ def real_generate(params: dict, emit) -> dict:
     generator = torch.Generator(device).manual_seed(seed)
     if model["kind"] == "img2video":
         return _wan_generate(params, emit, seed, generator)
+    if model["kind"] == "motion2video":
+        return _wan_animate_generate(params, emit, seed, generator)
+    if model["kind"] == "video2video":
+        return _vace_generate(params, emit, seed, generator)
 
     try:
         pipe.unload_lora_weights()

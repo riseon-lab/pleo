@@ -123,6 +123,76 @@
       "min_cuda_memory_gb": 80,
       "notes": "Wan 2.2 image-to-video using LightX2V's newer full 720p high/low distilled experts for maximum quality. Fixed 4-step CFG 1/1 schedule; 5s at 16 fps by default, configurable from 3–8s and 12–24 fps. CPU offload and a 10-minute warm runner target 96 GB VRAM safely.",
       "dim_multiple": 16
+    },
+    {
+      "id": "wan-animate-2-14b-distilled",
+      "name": "Wan Animate 2 14B · Distilled",
+      "family": "wan-animate-2",
+      "kind": "motion2video",
+      "repo_id": "Wan-AI/Wan2.2-Animate-2-14B-Distilled-Diffusers",
+      "reqs": "wan-control.txt",
+      "defaults": {
+        "steps": 10,
+        "cfg": 1.0,
+        "width": 640,
+        "height": 800,
+        "seed": -1,
+        "video_tier": "480p",
+        "video_aspect": "source",
+        "num_frames": 121,
+        "fps": 24
+      },
+      "video": {
+        "tiers": {
+          "480p": 399360,
+          "720p": 921600
+        },
+        "max_source_seconds": 8,
+        "max_source_bytes": 67108864,
+        "max_frames": 193,
+        "frame_multiple": 1,
+        "output_fps": 24
+      },
+      "output_mime": "video/mp4",
+      "keep_warm_seconds": 600,
+      "min_cuda_memory_gb": 80,
+      "notes": "End-to-end character animation from a reference image, driving video, and prompt. The distilled pipeline reads raw video directly and uses block offload for an 80–96 GB GPU.",
+      "dim_multiple": 16
+    },
+    {
+      "id": "wan-2.1-vace-14b",
+      "name": "Wan 2.1 VACE 14B",
+      "family": "wan-vace",
+      "kind": "video2video",
+      "repo_id": "Wan-AI/Wan2.1-VACE-14B-diffusers",
+      "reqs": "wan-control.txt",
+      "defaults": {
+        "steps": 50,
+        "cfg": 5.0,
+        "width": 832,
+        "height": 480,
+        "seed": -1,
+        "video_tier": "480p",
+        "video_aspect": "source",
+        "num_frames": 81,
+        "fps": 16
+      },
+      "video": {
+        "tiers": {
+          "480p": 399360,
+          "720p": 921600
+        },
+        "max_source_seconds": 5,
+        "max_source_bytes": 67108864,
+        "max_frames": 81,
+        "frame_multiple": 4,
+        "output_fps": 16
+      },
+      "output_mime": "video/mp4",
+      "keep_warm_seconds": 600,
+      "min_cuda_memory_gb": 80,
+      "notes": "Whole-shot video recreation from a source video, reference image, and descriptive prompt. Preserves source structure while changing subject, styling, or environment.",
+      "dim_multiple": 16
     }
   ],
   "components": {

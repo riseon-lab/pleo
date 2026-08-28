@@ -1,0 +1,11 @@
+# Wan Animate 2 + VACE. torch/torchvision come from the container through
+# --system-site-packages; these models use Diffusers' native raw-video paths.
+diffusers==0.40.0
+transformers>=4.51.0,<6
+accelerate>=1.2.0
+safetensors>=0.4.5
+sentencepiece
+pillow
+ftfy
+av>=14,<17
+numpy

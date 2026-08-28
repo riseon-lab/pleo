@@ -1,5 +1,5 @@
 """Generation queue: sequential jobs, SSE progress, moderation gate, outbox
-hand-off. Prompts and reference images live only in memory for the life of a
+hand-off. Prompts and reference media live only in memory for the life of a
 job — the server never persists them in plaintext."""
 import asyncio
 import base64
@@ -25,6 +25,8 @@ _history: list[dict] = []
 _current: Optional[dict] = None
 _worker_task: Optional[asyncio.Task] = None
 _wakeup = asyncio.Event()
+VIDEO_KINDS = {"img2video", "motion2video", "video2video"}
+DRIVEN_VIDEO_KINDS = {"motion2video", "video2video"}
 
 
 class LoraRef(BaseModel):
@@ -45,6 +47,7 @@ class GenerateBody(BaseModel):
     seed: int = -1
     loras: list[LoraRef] = Field(default_factory=list)
     ref_image_b64: Optional[str] = None  # plaintext, transient, for edit/I2V models
+    ref_video_b64: Optional[str] = None  # plaintext, transient, for driven video models
     video_tier: Optional[str] = None
     video_aspect: Optional[str] = None
     num_frames: Optional[int] = Field(None, ge=1, le=193)
@@ -65,24 +68,33 @@ def _publish_job(job: dict) -> None:
 @router.post("/generate", dependencies=[AUTHED])
 async def submit(body: GenerateBody):
     model = get_model(body.model_id)
-    is_video = model["kind"] == "img2video"
+    kind = model["kind"]
+    is_video = kind in VIDEO_KINDS
+    is_driven = kind in DRIVEN_VIDEO_KINDS
     # Latent/patch constraints vary per model (Z-Image/Qwen need multiples of
     # 16). Auto-round instead of rejecting — e.g. FHD 1080 becomes 1072.
     mult = int(model.get("dim_multiple", 16))
     def _snap(v: int) -> int:  # nearest multiple, ties toward the smaller (1080 -> 1072)
         return max(64, min(2048, (2 * v + mult - 1) // (2 * mult) * mult))
     width, height = _snap(body.width), _snap(body.height)
-    if model["kind"] in ("edit", "img2video") and not body.ref_image_b64:
-        raise HTTPException(400, "This model requires a reference image")
+    if kind == "edit" or is_video:
+        if not body.ref_image_b64:
+            raise HTTPException(400, "This model requires a reference image")
+    if is_driven and not body.ref_video_b64:
+        raise HTTPException(400, "This model requires a driving video")
+    if body.ref_video_b64 and not is_driven:
+        raise HTTPException(400, "This model does not accept a driving video")
+    if is_driven and body.loras:
+        raise HTTPException(400, "LoRAs are not supported by this video model")
     lora_defaults = model.get("lora_defaults", {})
-    if is_video and len(body.loras) > lora_defaults.get("max_stack", 4):
+    if kind == "img2video" and len(body.loras) > lora_defaults.get("max_stack", 4):
         raise HTTPException(400, f"Wan supports at most {lora_defaults.get('max_stack', 4)} stacked LoRAs")
     lora_files = []
     for lora in body.loras:
         p = config.LORAS_DIR / lora.file
         if not path_inside(config.LORAS_DIR, p) or not p.exists():
             raise HTTPException(400, f"Unknown LoRA: {lora.file}")
-        if is_video:
+        if kind == "img2video":
             lora_files.append({
                 "path": str(p),
                 "high_strength": lora.high_strength if lora.high_strength is not None else lora_defaults.get("high_strength", 0.7),
@@ -112,37 +124,59 @@ async def submit(body: GenerateBody):
             except (UnidentifiedImageError, Image.DecompressionBombError, OSError, ValueError):
                 raise HTTPException(400, "Reference image must be a valid PNG, JPEG, or WebP")
 
-            tiers = model["video"]["tiers"]
-            video_tier = body.video_tier or model["defaults"]["video_tier"]
-            if video_tier not in tiers:
-                raise HTTPException(400, f"video_tier must be one of: {', '.join(tiers)}")
-            video_aspect = body.video_aspect or model["defaults"].get("video_aspect", "source")
-            if video_aspect not in ("source", "9:16"):
-                raise HTTPException(400, "video_aspect must be source or 9:16")
-            area = tiers[video_tier]
-            if video_aspect == "9:16":
-                unit = int(math.sqrt(area / (9 * 16))) // mult * mult
-                width, height = 9 * unit, 16 * unit
-            else:
-                aspect = source_height / source_width
-                height = round(math.sqrt(area * aspect)) // mult * mult
-                width = round(math.sqrt(area / aspect)) // mult * mult
-            if min(width, height) < 64 or max(width, height) > 2048:
-                raise HTTPException(400, "Reference image aspect ratio is too extreme for Wan video")
         if moderation.is_enabled():
             verdict = await asyncio.to_thread(moderation.check_image, ref_bytes)
             if not verdict["allowed"]:
                 raise HTTPException(422, "Reference image blocked by moderation")
+    video_bytes = None
+    if body.ref_video_b64:
+        max_video_bytes = int(model.get("video", {}).get("max_source_bytes", 64 * 1024 * 1024))
+        if len(body.ref_video_b64) > (max_video_bytes * 4 // 3 + 8):
+            raise HTTPException(413, "Driving video too large")
+        try:
+            video_bytes = base64.b64decode(body.ref_video_b64, validate=True)
+        except (ValueError, TypeError):
+            raise HTTPException(400, "Invalid driving video base64")
+        if len(video_bytes) > max_video_bytes:
+            raise HTTPException(413, "Driving video too large")
+        if len(video_bytes) < 12 or video_bytes[4:8] != b"ftyp":
+            raise HTTPException(400, "Driving video must be a valid MP4")
+
     defaults = model["defaults"]
     if is_video:
+        tiers = model["video"]["tiers"]
+        video_tier = body.video_tier or defaults["video_tier"]
+        if video_tier not in tiers:
+            raise HTTPException(400, f"video_tier must be one of: {', '.join(tiers)}")
+        video_aspect = body.video_aspect or defaults.get("video_aspect", "source")
+        if video_aspect not in ("source", "9:16"):
+            raise HTTPException(400, "video_aspect must be source or 9:16")
+        area = tiers[video_tier]
+        if video_aspect == "9:16":
+            unit = int(math.sqrt(area / (9 * 16))) // mult * mult
+            width, height = 9 * unit, 16 * unit
+        else:
+            aspect = (height / width) if kind == "video2video" else (source_height / source_width)
+            height = round(math.sqrt(area * aspect)) // mult * mult
+            width = round(math.sqrt(area / aspect)) // mult * mult
+        if min(width, height) < 64 or max(width, height) > 2048:
+            raise HTTPException(400, "Source aspect ratio is too extreme for Wan video")
+
         fps = body.fps or defaults["fps"]
         num_frames = body.num_frames or defaults["num_frames"]
-        fps_options = model["video"]["fps_options"]
-        seconds_options = model["video"]["seconds_options"]
-        if fps not in fps_options:
-            raise HTTPException(400, f"fps must be one of: {', '.join(map(str, fps_options))}")
-        if num_frames not in {seconds * fps + 1 for seconds in seconds_options}:
-            raise HTTPException(400, "num_frames must match a supported 3–8 second duration at the selected fps")
+        if kind == "img2video":
+            fps_options = model["video"]["fps_options"]
+            seconds_options = model["video"]["seconds_options"]
+            if fps not in fps_options:
+                raise HTTPException(400, f"fps must be one of: {', '.join(map(str, fps_options))}")
+            if num_frames not in {seconds * fps + 1 for seconds in seconds_options}:
+                raise HTTPException(400, "num_frames must match a supported 3–8 second duration at the selected fps")
+        else:
+            fps = int(model["video"]["output_fps"])
+            max_frames = int(model["video"]["max_frames"])
+            frame_multiple = int(model["video"].get("frame_multiple", 1))
+            if not 2 <= num_frames <= max_frames or (num_frames - 1) % frame_multiple:
+                raise HTTPException(400, f"num_frames must be 2–{max_frames} on the model's frame grid")
     job = {
         "id": new_id(),
         "model_id": body.model_id,
@@ -150,13 +184,14 @@ async def submit(body: GenerateBody):
         "created": time.time(),
         "prompt": body.prompt,
         "negative_prompt": body.negative_prompt,
-        "steps": defaults["steps"] if is_video else body.steps,
-        "cfg": defaults["cfg"] if is_video else body.cfg,
+        "steps": defaults["steps"] if kind in ("img2video", "motion2video") else body.steps,
+        "cfg": defaults["cfg"] if kind in ("img2video", "motion2video") else body.cfg,
         "width": width,
         "height": height,
         "seed": body.seed,
         "loras": lora_files,
         "ref_bytes": ref_bytes,
+        "video_bytes": video_bytes,
     }
     if is_video:
         job.update({
@@ -223,7 +258,9 @@ async def _worker() -> None:
             }
             if job["ref_bytes"]:
                 params["ref_image_b64"] = base64.b64encode(job["ref_bytes"]).decode()
-            if model["kind"] == "img2video":
+            if job["video_bytes"]:
+                params["ref_video_b64"] = base64.b64encode(job["video_bytes"]).decode()
+            if model["kind"] in VIDEO_KINDS:
                 params.update({"num_frames": job["num_frames"], "fps": job["fps"],
                                "video_tier": job["video_tier"], "video_aspect": job["video_aspect"]})
             final = await runner_manager.generate(params, on_step)
@@ -234,6 +271,10 @@ async def _worker() -> None:
                     raise RuntimeError(f"Runner returned unsupported media type: {mime}")
                 media = base64.b64decode(final.get("media_b64") or final["image_b64"], validate=True)
                 job["seed"] = final.get("seed", job["seed"])
+                if mime == "video/mp4":
+                    for key in ("width", "height", "fps", "num_frames"):
+                        if final.get(key) is not None:
+                            job[key] = int(final[key])
                 if moderation.is_enabled():
                     moderation_bytes = media
                     if mime == "video/mp4":
@@ -257,12 +298,15 @@ async def _worker() -> None:
                 if mime == "video/mp4":
                     meta.update({"fps": job["fps"], "num_frames": job["num_frames"],
                                  "video_tier": job["video_tier"],
-                                 "video_aspect": job["video_aspect"],
-                                 "distilled_profile": model["distilled_experts"]["name"],
-                                 "lora_strengths": [
-                                     {"high": lora["high_strength"], "low": lora["low_strength"]}
-                                     for lora in job["loras"]
-                                 ]})
+                                 "video_aspect": job["video_aspect"]})
+                    if model.get("distilled_experts"):
+                        meta.update({
+                            "distilled_profile": model["distilled_experts"]["name"],
+                            "lora_strengths": [
+                                {"high": lora["high_strength"], "low": lora["low_strength"]}
+                                for lora in job["loras"]
+                            ],
+                        })
                 runner_manager.outbox_put(result_id, media, meta, mime)
                 job["status"] = "done"
                 job["result_id"] = result_id
@@ -273,7 +317,7 @@ async def _worker() -> None:
                 job["status"] = "error"
                 error = str(final.get("error", "unknown runner error"))
                 if final.get("error_code") == "cuda_oom":
-                    error = f"CUDA out of memory. The Wan runner was reset; close other GPU workloads or use 480p. {error}"
+                    error = f"CUDA out of memory. The video runner was reset; close other GPU workloads or use 480p. {error}"
                 job["error"] = error[:500]
         except Exception as e:
             job["status"] = "error"
@@ -290,6 +334,7 @@ async def _worker() -> None:
 def _finish(job: dict) -> None:
     global _current
     job.pop("ref_bytes", None)
+    job.pop("video_bytes", None)
     if _current is job:
         _current = None
     _history.insert(0, job)

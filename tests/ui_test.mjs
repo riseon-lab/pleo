@@ -120,7 +120,7 @@ check('tile menu closes on outside click', await page.locator('.tile-pop:not([hi
 await page.click('.nav-item[data-path="models"]');
 await page.waitForSelector('.model-card');
 const cards = await page.locator('.model-card').count();
-check('5 model cards', cards === 5, String(cards));
+check('7 model cards', cards === 7, String(cards));
 const chips = await page.locator('.model-card .badge').allTextContents();
 check('mock mode badges shown', chips.some(c => c.includes('mock')), chips.join(','));
 await page.screenshot({ path: SHOTS + '06-models.png' });
@@ -137,12 +137,12 @@ check('Wan hides incompatible freeform controls',
   await page.locator('label:has(span:text("Negative prompt")):visible, label:has(span:text-is("Resolution")):visible, .grid2:has(span:text("Steps")):visible, .grid2:has(span:text("Width")):visible').count() === 0);
 check('Wan explains why negative prompting is unavailable',
   (await page.locator('label:has(span:text-is("Prompt")) .field-help:visible').textContent()).includes('does not use a negative prompt'));
-await page.locator('.video-source-actions input[type=file]').setInputFiles({
+await page.locator('.video-source-actions input[type=file]').first().setInputFiles({
   name: 'start.gif', mimeType: 'image/gif', buffer: tinyPng(1),
 });
 await page.waitForSelector('.toast-error:has-text("JPG, PNG or WebP")');
 check('Wan rejects unsupported start-image formats before upload', await page.locator('.video-source-empty:visible').count() === 1);
-await page.locator('.video-source-actions input[type=file]').setInputFiles({
+await page.locator('.video-source-actions input[type=file]').first().setInputFiles({
   name: 'start.png', mimeType: 'image/png', buffer: tinyPng(2),
 });
 await page.waitForFunction(() => document.querySelector('.video-output-line')?.textContent.includes('624×624'));
@@ -152,7 +152,7 @@ await page.waitForFunction(async () => {
   const response = await fetch('/api/assets', { headers: { Authorization: `Bearer ${token}` } });
   return (await response.json()).assets.filter(a => a.kind === 'reference').length === 1;
 });
-await page.locator('.video-source-actions input[type=file]').setInputFiles({
+await page.locator('.video-source-actions input[type=file]').first().setInputFiles({
   name: 'replacement.png', mimeType: 'image/png', buffer: tinyPng(3),
 });
 await page.waitForFunction(async () => {
@@ -211,6 +211,20 @@ const storedPrefix = await page.evaluate(async (assetId) => {
   return String.fromCharCode(...bytes.slice(4, 8));
 }, wanSaved.asset_id);
 check('saved MP4 is ciphertext on the server', storedPrefix !== 'ftyp', storedPrefix);
+
+await page.selectOption('label:has(span:text("Model")) select', 'wan-animate-2-14b-distilled');
+check('Wan Animate exposes reference image + driving video controls',
+  await page.locator('.field:has(> span:text-is("Driving video")):visible').count() === 1 &&
+  (await page.locator('.wan-baked:visible').textContent()).includes('Wan Animate 2 distilled'));
+check('Wan Animate keeps distilled prompt controls locked',
+  await page.locator('label:has(span:text("Negative prompt")):visible, .grid2:has(span:text("Steps")):visible').count() === 0);
+
+await page.selectOption('label:has(span:text("Model")) select', 'wan-2.1-vace-14b');
+check('VACE exposes source video plus editable guidance controls',
+  await page.locator('.field:has(> span:text-is("Source video")):visible').count() === 1 &&
+  await page.locator('label:has(span:text("Negative prompt")):visible').count() === 1 &&
+  await page.locator('.grid2:has(span:text("Steps")):visible').count() === 1 &&
+  (await page.locator('.wan-baked:visible').textContent()).includes('VACE 14B'));
 await page.selectOption('label:has(span:text("Model")) select', 'z-image-base');
 
 await page.click('.nav-item[data-path="assets"]');

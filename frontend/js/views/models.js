@@ -25,7 +25,7 @@ export async function render(root) {
 
   function card(m) {
     const chips = [];
-    chips.push(chip({ edit: 'image edit', img2video: 'image → video', txt2img: 'txt2img' }[m.kind] || m.kind));
+    chips.push(chip({ edit: 'image edit', img2video: 'image → video', motion2video: 'motion → video', video2video: 'video → video', txt2img: 'txt2img' }[m.kind] || m.kind));
     if (data.mock) chips.push(chip('mock mode', 'warn'));
     else chips.push(
       { none: chip('env: none'), creating: chip('env: creating…', 'busy'), installing: chip('env: installing…', 'busy'), ready: chip('env: ready', 'ok'), error: chip('env: error', 'err') }[m.env] || chip(`env: ${m.env}`));

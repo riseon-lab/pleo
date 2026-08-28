@@ -90,7 +90,7 @@ check("cross-origin POST still rejected behind proxy", r.status_code == 403, r.t
 # --- models ---
 r = c.get("/api/models", headers=H)
 models = r.json()
-check("models list (5, mock mode)", len(models["models"]) == 5 and models["mock"] is True, r.text[:200])
+check("models list (7, mock mode)", len(models["models"]) == 7 and models["mock"] is True, r.text[:200])
 wan_model = next((m for m in models["models"] if m["id"] == "wan-2.2-i2v-a14b-lightning"), None)
 check("Wan distilled quality model metadata", wan_model and wan_model["kind"] == "img2video" and
       "2026-04-12" in wan_model["distilled_experts"]["name"] and
@@ -102,6 +102,12 @@ check("Wan distilled quality model metadata", wan_model and wan_model["kind"] ==
       wan_model["video"]["seconds_options"] == [3, 4, 5, 6, 7, 8] and
       wan_model["lora_defaults"] == {"high_strength": 0.7, "low_strength": 0.5, "max_stack": 4} and
       wan_model["output_mime"] == "video/mp4", str(wan_model))
+animate_model = next((m for m in models["models"] if m["id"] == "wan-animate-2-14b-distilled"), None)
+vace_model = next((m for m in models["models"] if m["id"] == "wan-2.1-vace-14b"), None)
+check("Wan Animate and VACE metadata", animate_model and animate_model["kind"] == "motion2video" and
+      animate_model["defaults"]["steps"] == 10 and animate_model["video"]["output_fps"] == 24 and
+      vace_model and vace_model["kind"] == "video2video" and vace_model["video"]["max_frames"] == 81 and
+      vace_model["video"]["output_fps"] == 16, str((animate_model, vace_model)))
 from backend import models_api, runner_manager
 from backend.models_api import _sources, _wanted
 from backend.registry import get_model
@@ -292,6 +298,63 @@ r = c.post("/api/generate", headers=H, json={**wan, "num_frames": 82})
 check("Wan rejects off-grid duration", r.status_code == 400, r.text)
 r = c.post("/api/generate", headers=H, json={**wan, "fps": 8})
 check("Wan rejects unsupported fps", r.status_code == 400, r.text)
+
+# --- Raw driving-video paths: Wan Animate + VACE (mock MP4) ---
+driving_b64 = model_runner.MOCK_MP4_B64
+animate = {**gen, "model_id": "wan-animate-2-14b-distilled", "steps": 99, "cfg": 9,
+           "video_tier": "480p", "video_aspect": "source", "num_frames": 25, "fps": 24,
+           "ref_image_b64": base64.b64encode(png).decode(), "ref_video_b64": driving_b64}
+r = c.post("/api/generate", headers=H, json=animate)
+check("submit Wan Animate with raw driving MP4", r.status_code == 200, r.text)
+animate_job = r.json()["job"]
+check("Wan Animate uses distilled timing", animate_job["steps"] == 10 and animate_job["fps"] == 24 and
+      animate_job["num_frames"] == 25, str(animate_job))
+
+deadline = time.time() + 30
+animate_done = None
+while time.time() < deadline:
+    animate_done = next((j for j in c.get("/api/queue", headers=H).json()["history"]
+                         if j["id"] == animate_job["id"]), None)
+    if animate_done:
+        break
+    time.sleep(0.5)
+check("Wan Animate job completed", animate_done and animate_done["status"] == "done", str(animate_done))
+if animate_done and animate_done.get("result_id"):
+    r = c.get(f"/api/results/{animate_done['result_id']}", headers=H)
+    check("Wan Animate result is MP4", r.status_code == 200 and r.content[4:8] == b"ftyp", r.text[:100])
+    c.delete(f"/api/results/{animate_done['result_id']}", headers=H)
+
+vace = {**animate, "model_id": "wan-2.1-vace-14b", "steps": 2, "cfg": 5,
+        "width": 640, "height": 480, "num_frames": 17, "fps": 60}
+r = c.post("/api/generate", headers=H, json=vace)
+check("submit VACE source-video recreation", r.status_code == 200, r.text)
+vace_job = r.json()["job"]
+check("VACE keeps controls and locks output fps", vace_job["steps"] == 2 and
+      vace_job["fps"] == 16 and vace_job["num_frames"] == 17, str(vace_job))
+
+deadline = time.time() + 30
+vace_done = None
+while time.time() < deadline:
+    vace_done = next((j for j in c.get("/api/queue", headers=H).json()["history"]
+                      if j["id"] == vace_job["id"]), None)
+    if vace_done:
+        break
+    time.sleep(0.5)
+check("VACE job completed", vace_done and vace_done["status"] == "done", str(vace_done))
+if vace_done and vace_done.get("result_id"):
+    r = c.get(f"/api/results/{vace_done['result_id']}", headers=H)
+    check("VACE result is MP4", r.status_code == 200 and r.content[4:8] == b"ftyp", r.text[:100])
+    c.delete(f"/api/results/{vace_done['result_id']}", headers=H)
+
+r = c.post("/api/generate", headers=H, json={**animate, "ref_video_b64": None})
+check("guided video model requires a driving clip", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**animate,
+           "ref_video_b64": base64.b64encode(b"not an mp4").decode()})
+check("guided video model rejects a non-MP4 clip", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**animate, "loras": [{"file": wan_lora_a.name}]})
+check("guided video models reject unsupported LoRAs", r.status_code == 400, r.text)
+r = c.post("/api/generate", headers=H, json={**gen, "ref_video_b64": driving_b64})
+check("image models reject unused driving clips", r.status_code == 400, r.text)
 wan_lora_a.unlink()
 wan_lora_b.unlink()
 

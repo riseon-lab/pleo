@@ -29,8 +29,10 @@ export function evictDecryptedAssetURL(assetId) {
 }
 
 export async function saveReferenceAsset(bytes, name, mime) {
-  const mod = await api('/api/moderate', { method: 'POST', body: { image_b64: bufToB64(bytes) } });
-  if (mod.enabled && !mod.allowed) throw new Error('blocked by moderation');
+  if (mime.startsWith('image/')) {
+    const mod = await api('/api/moderate', { method: 'POST', body: { image_b64: bufToB64(bytes) } });
+    if (mod.enabled && !mod.allowed) throw new Error('blocked by moderation');
+  }
   const encMeta = await encryptJSON({ name, type: mime, uploaded: Date.now() });
   const enc = await encryptBytes(bytes.slice(0));
   return api('/api/assets', { method: 'POST', body: enc, headers: {
@@ -40,7 +42,7 @@ export async function saveReferenceAsset(bytes, name, mime) {
 
 export async function render(root) {
   let filter = 'all';
-  const uploadInput = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp', multiple: true, style: 'display:none', onchange: () => uploadRefs(uploadInput.files) });
+  const uploadInput = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,.webp,.mp4,image/png,image/jpeg,image/webp,video/mp4', multiple: true, style: 'display:none', onchange: () => uploadRefs(uploadInput.files) });
 
   const grid = h('div', { class: 'asset-grid' });
   const tabs = h('div', { class: 'tabs' },
