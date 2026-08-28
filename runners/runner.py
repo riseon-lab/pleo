@@ -561,7 +561,8 @@ def _wan_animate_generate(params: dict, emit, seed: int, generator) -> dict:
             max_frames=video_cfg["max_frames"])
         if STATE["cancel"].is_set():
             raise Cancelled()
-        emit({"type": "step", "step": 2, "total": 3, "stage": "Transferring performance…"})
+        emit({"type": "step", "step": 2, "total": 3,
+              "stage": "Compiling on first run, then transferring performance…"})
         videos = STATE["pipe"](
             image=source, driving_video=driving, driving_video_fps=driving_fps,
             prompt=params["prompt"], width=params["width"], height=params["height"],
