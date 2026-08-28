@@ -274,7 +274,7 @@ def _load_wan_animate(model: dict):
     # card. Diffusers' block streaming is the model's documented inference path.
     pipe.transformer.enable_group_offload(
         onload_device=torch.device("cuda"), offload_device=torch.device("cpu"),
-        offload_type="block_level", use_stream=True)
+        offload_type="block_level", num_blocks_per_group=1, use_stream=True)
     pipe.text_encoder.to("cuda")
     pipe.image_encoder.to("cuda")
     pipe.vae.to("cuda")
