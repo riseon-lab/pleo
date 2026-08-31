@@ -450,6 +450,14 @@ r = c.post("/api/loras", headers={**H, "X-Pleo-Filename": "caf%C3%A9.safetensors
 check("local lora upload decodes Unicode filename", r.status_code == 200 and
       r.json()["file"] == "caf_.safetensors", r.text)
 c.delete("/api/loras/caf_.safetensors", headers=H)
+chunk_headers = {**H, "X-Pleo-Filename": "chunked.safetensors", "X-Pleo-Total-Size": "6"}
+r = c.put("/api/loras/uploads/chunk-test-123", headers={**chunk_headers, "X-Pleo-Offset": "0"}, content=b"abc")
+check("chunked lora upload accepts first part", r.status_code == 200 and
+      r.json()["received"] == 3 and r.json()["complete"] is False, r.text)
+r = c.put("/api/loras/uploads/chunk-test-123", headers={**chunk_headers, "X-Pleo-Offset": "3"}, content=b"def")
+check("chunked lora upload completes", r.status_code == 200 and r.json()["complete"] is True and
+      (loras_dir / "chunked.safetensors").read_bytes() == b"abcdef", r.text)
+c.delete("/api/loras/chunked.safetensors", headers=H)
 r = c.get("/api/loras", headers=H)
 check("local lora listed", any(l["file"] == "test-lora.safetensors" for l in r.json()["loras"]))
 gen_l = {**gen, "steps": 2, "loras": [{"file": "test-lora.safetensors", "strength": -0.5}]}

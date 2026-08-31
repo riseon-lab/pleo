@@ -3,6 +3,8 @@ import { api, apiBlob, onEvent } from '../api.js';
 import { h, clear, toast, modal, confirmModal, fmtBytes } from '../ui.js';
 import { getApiKeys } from './settings.js';
 
+const UPLOAD_CHUNK_BYTES = 32 * 1024 * 1024;
+
 export async function render(root) {
   let tab = 'local';
   const tabsEl = h('div', { class: 'tabs' },
@@ -32,14 +34,27 @@ export async function render(root) {
       onchange: async () => {
         const files = [...input.files];
         upload.disabled = true;
-        upload.textContent = files.length > 1 ? `Uploading ${files.length} LoRAs…` : 'Uploading…';
-        for (const file of files) {
+        for (const [index, file] of files.entries()) {
+          const uploadId = crypto.randomUUID();
           try {
-            await api('/api/loras', {
-              method: 'POST', body: file, headers: { 'X-Pleo-Filename': encodeURIComponent(file.name) },
-            });
+            if (!file.size) throw new Error('File is empty');
+            for (let offset = 0; offset < file.size; offset += UPLOAD_CHUNK_BYTES) {
+              const chunk = file.slice(offset, offset + UPLOAD_CHUNK_BYTES);
+              upload.textContent = `Uploading${files.length > 1 ? ` ${index + 1}/${files.length}` : ''} · ${Math.round(offset / file.size * 100)}%`;
+              await api(`/api/loras/uploads/${uploadId}`, {
+                method: 'PUT', body: chunk,
+                headers: {
+                  'X-Pleo-Filename': encodeURIComponent(file.name),
+                  'X-Pleo-Offset': offset,
+                  'X-Pleo-Total-Size': file.size,
+                },
+              });
+            }
             toast(`${file.name} uploaded`, 'success');
-          } catch (e) { toast(`${file.name}: ${e.message}`, 'error'); }
+          } catch (e) {
+            await api(`/api/loras/uploads/${uploadId}`, { method: 'DELETE' }).catch(() => {});
+            toast(`${file.name}: ${e.message}`, 'error');
+          }
         }
         input.value = '';
         await draw();
