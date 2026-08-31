@@ -1,12 +1,14 @@
-"""LoRA management: Civitai resolve/download, Hugging Face download, local
-list/delete. API keys arrive per-request (decrypted in the browser, used
+"""LoRA management: local upload/list/delete, Civitai and Hugging Face downloads.
+API keys arrive per-request (decrypted in the browser, used
 transiently) — they are never stored plaintext server-side."""
+import os
 import re
 import threading
 import time
+from urllib.parse import unquote
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 
 from . import config, events
@@ -19,6 +21,7 @@ _downloads: dict[str, dict] = {}  # download_id -> {status, progress, ...}
 _dl_lock = threading.Lock()
 
 CIVITAI_API = "https://civitai.com/api/v1"
+MAX_LORA_BYTES = 8 * 1024 ** 3
 
 
 def _sidecar(path):
@@ -38,6 +41,47 @@ def list_loras():
             "label": meta.get("label", f.stem),
         })
     return {"loras": items}
+
+
+@router.post("")
+async def upload_lora(request: Request):
+    raw_name = request.headers.get("x-pleo-filename")
+    if not raw_name:
+        raise HTTPException(400, "Filename required")
+    name = safe_filename(unquote(raw_name))
+    suffix = ".safetensors"
+    if not name.lower().endswith(suffix):
+        raise HTTPException(400, "LoRA must be a .safetensors file")
+    name = name[:-len(suffix)] + suffix
+    dest = config.LORAS_DIR / name
+    if dest.exists():
+        raise HTTPException(409, "A LoRA with that filename already exists")
+
+    declared = request.headers.get("content-length")
+    try:
+        if declared and int(declared) > MAX_LORA_BYTES:
+            raise HTTPException(413, "LoRA too large (8 GB maximum)")
+    except ValueError:
+        raise HTTPException(400, "Invalid Content-Length")
+
+    tmp = config.LORAS_DIR / f".{new_id(8)}.part"
+    size = 0
+    try:
+        with tmp.open("xb") as out:
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_LORA_BYTES:
+                    raise HTTPException(413, "LoRA too large (8 GB maximum)")
+                out.write(chunk)
+        if not size:
+            raise HTTPException(400, "Empty file")
+        try:
+            os.link(tmp, dest)
+        except FileExistsError:
+            raise HTTPException(409, "A LoRA with that filename already exists")
+    finally:
+        tmp.unlink(missing_ok=True)
+    return {"file": name, "size": size}
 
 
 @router.get("/{filename}/file")

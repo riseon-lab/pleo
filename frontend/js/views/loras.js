@@ -1,4 +1,4 @@
-// LoRAs view: Hugging Face + Civitai download tabs, local list, progress.
+// LoRAs view: local upload/list, Hugging Face + Civitai downloads, progress.
 import { api, apiBlob, onEvent } from '../api.js';
 import { h, clear, toast, modal, confirmModal, fmtBytes } from '../ui.js';
 import { getApiKeys } from './settings.js';
@@ -27,7 +27,27 @@ export async function render(root) {
   async function drawLocal() {
     const { loras } = await api('/api/loras');
     const card = h('div', { class: 'card' });
-    if (!loras.length) card.append(h('p', { class: 'muted' }, 'No LoRAs downloaded yet. Use the Hugging Face or Civitai tabs.'));
+    const input = h('input', {
+      type: 'file', accept: '.safetensors', multiple: true, hidden: true,
+      onchange: async () => {
+        const files = [...input.files];
+        upload.disabled = true;
+        upload.textContent = files.length > 1 ? `Uploading ${files.length} LoRAs…` : 'Uploading…';
+        for (const file of files) {
+          try {
+            await api('/api/loras', {
+              method: 'POST', body: file, headers: { 'X-Pleo-Filename': encodeURIComponent(file.name) },
+            });
+            toast(`${file.name} uploaded`, 'success');
+          } catch (e) { toast(`${file.name}: ${e.message}`, 'error'); }
+        }
+        input.value = '';
+        await draw();
+      },
+    });
+    const upload = h('button', { class: 'btn small', onclick: () => input.click() }, 'Upload LoRA');
+    card.append(h('div', { class: 'row gap', style: 'margin-bottom:14px' }, upload, input));
+    if (!loras.length) card.append(h('p', { class: 'muted' }, 'No LoRAs yet. Upload one or use the Hugging Face or Civitai tabs.'));
     const list = h('div', { class: 'list' });
     for (const l of loras) {
       list.append(h('div', { class: 'list-row' },

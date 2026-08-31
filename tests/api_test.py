@@ -438,7 +438,18 @@ r = c.post("/api/generate", headers=H, json={**gen, "loras": [{"file": "../../..
 check("lora path traversal rejected", r.status_code == 400, r.text)
 
 # --- loras: local file lifecycle ---
-(loras_dir / "test-lora.safetensors").write_bytes(b"\x00" * 128)
+r = c.post("/api/loras", headers={**H, "X-Pleo-Filename": "test-lora.safetensors"},
+           content=b"\x00" * 128)
+check("local lora uploaded", r.status_code == 200 and r.json()["size"] == 128, r.text)
+r = c.post("/api/loras", headers={**H, "X-Pleo-Filename": "test-lora.safetensors"}, content=b"duplicate")
+check("local lora upload refuses overwrite", r.status_code == 409 and
+      (loras_dir / "test-lora.safetensors").read_bytes() == b"\x00" * 128, r.text)
+r = c.post("/api/loras", headers={**H, "X-Pleo-Filename": "not-a-lora.bin"}, content=b"bad")
+check("local lora upload requires safetensors", r.status_code == 400, r.text)
+r = c.post("/api/loras", headers={**H, "X-Pleo-Filename": "caf%C3%A9.safetensors"}, content=b"unicode")
+check("local lora upload decodes Unicode filename", r.status_code == 200 and
+      r.json()["file"] == "caf_.safetensors", r.text)
+c.delete("/api/loras/caf_.safetensors", headers=H)
 r = c.get("/api/loras", headers=H)
 check("local lora listed", any(l["file"] == "test-lora.safetensors" for l in r.json()["loras"]))
 gen_l = {**gen, "steps": 2, "loras": [{"file": "test-lora.safetensors", "strength": -0.5}]}

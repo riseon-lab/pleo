@@ -234,6 +234,12 @@ check('encrypted MP4 decrypts and remains playable in Assets', await page.locato
 // ---- loras ----
 await page.click('.nav-item[data-path="loras"]');
 await page.waitForSelector('.tabs');
+check('local LoRAs has an upload button', await page.locator('button:text-is("Upload LoRA")').count() === 1);
+await page.locator('input[type=file][accept=".safetensors"]').setInputFiles({
+  name: 'café.safetensors', mimeType: 'application/octet-stream', buffer: Buffer.from('test-lora'),
+});
+await page.waitForSelector('.list-row:has-text("caf_.safetensors")');
+check('local LoRA with a Unicode filename uploads and appears in the list', true);
 await page.click('.tab[data-t="civitai"]');
 check('civitai tab renders', await page.locator('h3:text("Download from Civitai")').count() === 1);
 await page.click('.tab[data-t="hf"]');
