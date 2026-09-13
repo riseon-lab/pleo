@@ -508,7 +508,7 @@ def _wan_generate(params: dict, emit, seed: int, generator) -> dict:
     torch.cuda.reset_peak_memory_stats()
     pipe.enable_model_cpu_offload()
     source = Image.open(io.BytesIO(base64.b64decode(params["ref_image_b64"]))).convert("RGB")
-    if params.get("video_aspect") == "9:16":
+    if params.get("video_aspect") in ("9:16", "16:9"):
         source = ImageOps.fit(source, (params["width"], params["height"]), Image.Resampling.LANCZOS)
     try:
         frames = pipe(

@@ -1,8 +1,29 @@
-# Pleo
+# Creative workspace
 
 Lightweight local model loader & runner for RunPod. FastAPI backend + vanilla
 JS frontend on port **3000**, per-model venv isolation, browser-side (E2E)
 encryption of assets and API keys. See `plan.md` for the full spec.
+
+## Guided creation
+
+The welcome screen offers **Guided experience** and **Classic workspace**. Both
+use the same password gate, queue, models, and encrypted asset library. The
+classic controls are preserved with the shared midnight-blue theme. Existing
+storage keys, encryption derivation labels, environment variables and API headers
+keep their historical names for compatibility; these are not visible branding.
+
+The guided route supports character upload/library selection or image generation
+(with an optional compatible LoRA), dance/scene/camera prompt suggestions, Wan
+image-to-video or a driving MP4, portrait/landscape framing, and a downloadable
+video saved to the encrypted library. MP3/WAV audio can be mixed at a chosen start
+time. Install **FFmpeg + ffprobe** for soundtrack support; new container builds
+include them. Existing containers need FFmpeg installed or an image rebuild.
+
+Draft prompts, reference bytes, audio and lyric notes remain in browser memory;
+refreshing clears the draft. Saved characters/results remain in the library.
+Lyric notes are planning notes only. Beat tracking, aligned lyrics, phoneme-driven
+lip-sync and Higgsfield API integration are **not implemented**. See
+[the pipeline roadmap](docs/creation-pipeline.md) for the next stages.
 
 ## Local development (no GPU needed)
 
@@ -32,7 +53,7 @@ docker run --gpus all -p 3000:3000 -v /your/volume:/workspace \
 ```
 
 - Code is cloned/pulled from git at boot (and via Settings → Pull latest code),
-  so image rebuilds are only needed when CUDA/torch change. If the repo is
+  so image rebuilds are needed only when system dependencies (such as CUDA, torch or FFmpeg) change. If the repo is
   private, use `PLEO_REPO=https://<token>@github.com/riseon-lab/pleo.git`.
 - All persistent data (weights cache, venvs, encrypted assets, LoRAs,
   datasets, training runs) lives under `/workspace/pleo-data`.
@@ -49,6 +70,7 @@ docker run --gpus all -p 3000:3000 -v /your/volume:/workspace \
 - Assets and API keys are encrypted in a Web Worker before upload; the server
   stores ciphertext only. Generated images are handed to the browser through a
   transient in-memory outbox, encrypted client-side, then uploaded.
+- Soundtrack validation/mixing uses private OS temporary files and deletes them on completion or error; a hard process/host crash can leave temporary files behind. Generation inputs are plaintext during processing, so run on a trusted host. Persistent assets remain encrypted.
 - No password reset endpoint by design. To wipe: `python -m backend.reset_account`.
 
 ## Repo ids

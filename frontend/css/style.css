@@ -1,33 +1,16 @@
-/* Pleo — soft aubergine theme */
+/* Shared midnight-blue workspace theme. */
 :root {
-  --bg: #D9D0E7;
-  --surface: #F0EBF5;
-  --surface-raised: #FAF7FC;
-  --surface-muted: #E5DEED;
-  --ink: #261D30;
-  --ink-soft: #62566D;
-  --line: #C4B7D2;
-  --accent: #5A3D78;
-  --accent-strong: #412B59;
-  --on-accent: #F8F4FC;
-  --danger: #A63D52;
-  --danger-line: #D5A2AD;
-  --danger-bg: #F0DCE2;
-  --ok: #276450;
-  --ok-line: #94BBAA;
-  --ok-bg: #DBEAE3;
-  --warn: #6C5008;
-  --warn-line: #C8B373;
-  --warn-bg: #EEE4C5;
-  --busy: #3F5D86;
-  --busy-line: #A3B6D0;
-  --busy-bg: #DDE5F1;
-  --dark: #19131F;
-  --on-dark: #ECE5F1;
-  --radius: 14px;
-  --shadow: 0 1px 2px rgba(49,31,66,.08), 0 10px 30px rgba(49,31,66,.09);
-  --side-w: 232px;
-  --side-w-collapsed: 64px;
+  color-scheme: dark;
+  --bg: #070c15; --surface: #101b2c; --surface-raised: #142238; --surface-muted: #192c45;
+  --ink: #eef5ff; --ink-soft: #a8b9d0; --line: #2b4260;
+  --accent: #397df6; --accent-strong: #79adff; --on-accent: #ffffff;
+  --danger: #ff8297; --danger-line: #7e3f51; --danger-bg: #321d2a;
+  --ok: #8de2c4; --ok-line: #315f57; --ok-bg: #142c29;
+  --warn: #f1cc85; --warn-line: #726039; --warn-bg: #30291b;
+  --busy: #8cbcff; --busy-line: #385e8f; --busy-bg: #162b45;
+  --dark: #040811; --on-dark: #eef5ff; --radius: 14px;
+  --shadow: 0 1px 0 #ffffff0a inset, 0 18px 45px #00000033;
+  --side-w: 232px; --side-w-collapsed: 64px;
 }
 
 * { box-sizing: border-box; }

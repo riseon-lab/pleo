@@ -9,6 +9,7 @@ import os
 import sys
 import threading
 import time
+import wave
 from pathlib import Path
 
 import httpx
@@ -264,6 +265,30 @@ wan_runner = c.get("/api/models", headers=H).json()["runner"]
 check("Wan runner stays warm between clips",
       wan_runner["status"] == "ready" and wan_runner["model_id"] == wan["model_id"], str(wan_runner))
 c.delete(f"/api/results/{wan_done['result_id']}", headers=H)
+
+# Guided video stages deliberately unload before CPU-only soundtrack mixing.
+audio_buf = io.BytesIO()
+with wave.open(audio_buf, "wb") as audio:
+    audio.setparams((1, 2, 8000, 0, "NONE", "not compressed"))
+    audio.writeframes(b"\x00\x00" * 8000)
+r = c.post("/api/generate", headers=H, json={**wan, "loras": [], "video_aspect": "16:9",
+                                                "release_after_generate": True,
+                                                "audio_b64": base64.b64encode(audio_buf.getvalue()).decode()})
+check("guided landscape video with soundtrack accepted", r.status_code == 200, r.text)
+guided_job = r.json()["job"]
+check("guided landscape uses exact 16:9 dimensions", (guided_job["width"], guided_job["height"]) == (768, 432), str(guided_job))
+deadline = time.time() + 30
+guided_done = None
+while time.time() < deadline:
+    q = c.get("/api/queue", headers=H).json()
+    guided_done = next((j for j in q["history"] if j["id"] == guided_job["id"]), None)
+    if guided_done:
+        break
+    time.sleep(0.5)
+check("guided soundtrack video completed", guided_done and guided_done["status"] == "done", str(guided_done))
+guided_runner = c.get("/api/models", headers=H).json()["runner"]
+check("guided stage releases runner before next job", guided_runner["status"] == "stopped", str(guided_runner))
+c.delete(f"/api/results/{guided_done['result_id']}", headers=H)
 
 r = c.post("/api/generate", headers=H, json={**wan, "video_tier": "720p", "video_aspect": "9:16",
                                                     "num_frames": 97, "fps": 12})

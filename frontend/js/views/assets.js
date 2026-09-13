@@ -5,6 +5,25 @@ import { decryptBytes, decryptJSON, encryptBytes, encryptJSON } from '../crypto.
 import { h, clear, toast, lightbox, confirmModal, spinner, fmtBytes } from '../ui.js';
 
 const urlCache = new Map(); // asset id -> Promise<objectURL> (decrypted)
+const resultSaves = new Map();
+
+// Both creation routes can collect a result; share the save to avoid duplicates.
+export function saveGeneratedResult(job, bytes, meta, mime) {
+  if (resultSaves.has(job.result_id)) return resultSaves.get(job.result_id);
+  const pending = (async () => {
+    const encMeta = await encryptJSON({ ...meta, mime, saved: Date.now() });
+    const encBlob = await encryptBytes(bytes.slice(0));
+    const entry = await api('/api/assets', { method: 'POST', body: encBlob, headers: {
+      'X-Pleo-Kind': 'generated', 'X-Pleo-Meta': encMeta, 'X-Pleo-Mime': mime,
+    } });
+    await api(`/api/jobs/${job.id}/asset`, { method: 'POST', body: { asset_id: entry.id } });
+    await api(`/api/results/${job.result_id}`, { method: 'DELETE' });
+    return entry;
+  })();
+  resultSaves.set(job.result_id, pending);
+  pending.catch(() => resultSaves.delete(job.result_id));
+  return pending;
+}
 
 export function assetMime(asset) { return asset?.mime || 'image/png'; }
 

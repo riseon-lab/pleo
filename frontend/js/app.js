@@ -10,6 +10,7 @@ import * as loras from './views/loras.js';
 import * as settings from './views/settings.js';
 import * as datastudio from './views/datastudio.js';
 import * as training from './views/training.js';
+import * as journey from './views/journey.js';
 
 const ICONS = {
   running: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>',
@@ -22,6 +23,7 @@ const ICONS = {
 };
 
 const ROUTES = [
+  { path: 'journey', label: 'Create a video', icon: 'running', view: journey },
   { path: 'running', label: 'Running', icon: 'running', view: running },
   { path: 'models', label: 'Models', icon: 'models', view: models },
   { path: 'assets', label: 'Assets', icon: 'assets', view: assets },
@@ -36,6 +38,9 @@ const appEl = document.getElementById('app');
 
 setUnauthorizedHandler(() => {
   setToken(null);
+  currentCleanup?.();
+  currentCleanup = null;
+  currentPath = null;
   disconnectEvents();
   showLoginGate();
 });
@@ -129,6 +134,7 @@ let currentPath = null;
 let currentCleanup = null;
 
 function enterApp() {
+  document.getElementById('welcome').hidden = true;
   bootEl.style.display = 'none';
   appEl.hidden = false;
   connectEvents();
@@ -147,6 +153,7 @@ function buildSidebar() {
     nav.append(item);
   }
   const foot = clear(document.getElementById('side-foot'));
+  foot.append(h('button', { class: 'nav-item', onclick: showWelcome }, 'Welcome'));
   const sItem = h('button', { class: 'nav-item', dataset: { path: 'settings' }, onclick: () => { location.hash = '#/settings'; } });
   sItem.insertAdjacentHTML('beforeend', ICONS.settings);
   sItem.append(h('span', { class: 'nav-label' }, 'Settings'));
@@ -158,6 +165,7 @@ function buildSidebar() {
 }
 
 async function route() {
+  if (appEl.hidden) return;
   const path = (location.hash.replace(/^#\//, '') || getUI().route || 'running').split('?')[0];
   const entry = path === 'settings'
     ? { path: 'settings', view: settings }
@@ -165,6 +173,7 @@ async function route() {
   if (currentPath === entry.path) return;
   if (currentCleanup) { try { currentCleanup(); } catch { } currentCleanup = null; }
   currentPath = entry.path;
+  appEl.classList.toggle('journey-mode', entry.path === 'journey');
   saveUI({ route: entry.path });
   document.querySelectorAll('.nav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.path === entry.path));
@@ -184,4 +193,29 @@ export function logoutAndReload() {
   cryp.clearKey().finally(() => location.reload());
 }
 
-boot();
+function showWelcome() {
+  currentCleanup?.();
+  currentCleanup = null;
+  currentPath = null;
+  appEl.hidden = true;
+  bootEl.style.display = 'none';
+  const welcome = clear(document.getElementById('welcome'));
+  welcome.hidden = false;
+  const enter = (path) => {
+    welcome.hidden = true;
+    location.hash = `#/${path}`;
+    bootEl.style.display = 'flex';
+    boot();
+  };
+  welcome.append(h('div', { class: 'welcome-scene' },
+    h('header', { class: 'welcome-nav' }, h('span', { class: 'eyebrow' }, 'YOUR IDEAS. IN MOTION.'), h('span', { class: 'muted' }, 'A private creative space')),
+    h('section', { class: 'welcome-copy' },
+      h('p', { class: 'eyebrow' }, 'FROM FIRST FRAME TO FINAL MOVE'),
+      h('h1', {}, 'Set the stage.', h('br'), h('span', {}, 'Make it move.')),
+      h('p', { class: 'welcome-description' }, 'Your character. Your track. Your direction. Turn an idea into a dance film, one step at a time.'),
+      h('div', { class: 'entrances' },
+        h('button', { class: 'entrance primary', onclick: () => enter('journey') }, h('span', { class: 'eyebrow' }, '01 / GUIDED EXPERIENCE'), h('strong', {}, 'Create something new'), h('span', {}, 'Choose a character and follow the journey →')),
+        h('button', { class: 'entrance', onclick: () => enter('running') }, h('span', { class: 'eyebrow' }, '02 / CLASSIC WORKSPACE'), h('strong', {}, 'Take the controls'), h('span', {}, 'Your models, assets and familiar tools →')))),
+    h('footer', { class: 'welcome-footer' }, h('span', {}, 'CHARACTER  /  SOUND  /  MOTION  /  FRAME'), h('span', {}, 'Imagine it. Direct it.'))));
+}
+showWelcome();

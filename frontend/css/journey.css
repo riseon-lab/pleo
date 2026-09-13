@@ -1,0 +1,79 @@
+/* One visual language for the guided and classic routes. */
+body { background: radial-gradient(ellipse at 80% 0%, #17355b55, transparent 65%), var(--bg); }
+button, a, input, select, textarea { -webkit-tap-highlight-color: transparent; }
+:focus-visible { outline: 2px solid #a3ceff; outline-offset: 4px; }
+.btn.danger { color: #240913; }
+.sidebar, .boot-card, .glass-panel { background: linear-gradient(145deg, #1c2d43b8, #0d1726db); backdrop-filter: blur(24px); }
+.boot-card { border-top-color: #6884a3; }
+.eyebrow { font-size: 11px; font-weight: 650; letter-spacing: .2em; color: #a6c9fd; }
+.welcome-scene { min-height: 100svh; padding: 34px 6vw 26px; display: flex; flex-direction: column; background: linear-gradient(90deg,#060c16f5 0%,#060c16be 40%,#060c1620 100%), url('../images/stage.png') center / cover; }
+.welcome-nav, .welcome-footer, .journey-header { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.welcome-copy { padding: clamp(70px, 11vh, 140px) 0 80px; max-width: 740px; flex: 1; }
+.welcome-copy h1 { font-size: clamp(52px, 6.4vw, 96px); line-height: 1.01; font-weight: 550; letter-spacing: -.065em; margin: 20px 0 26px; }
+.welcome-copy h1 span { color: #95bfff; }
+.welcome-description { font-size: 18px; max-width: 440px; color: #b7c6db; line-height: 1.7; }
+.entrances { margin-top: 40px; display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.entrance { color: var(--ink); font: inherit; cursor: pointer; border: 1px solid #54739188; border-radius: 16px; background: linear-gradient(135deg,#35475c66,#101928b3); backdrop-filter: blur(16px); padding: 24px; text-align: left; display: flex; flex-direction: column; gap: 15px; transition: border-color .2s, transform .2s; box-shadow: 0 1px 0 #ffffff26 inset; }
+.entrance.primary { background: linear-gradient(140deg,#2665c58c,#102c54b3); border-color: #78afff99; }
+.entrance:hover { border-color: #b5d6ff; transform: translateY(-3px); }
+.entrance strong { font-size: 22px; font-weight: 550; letter-spacing: -.035em; }
+.entrance > span:last-child { font-size: 12px; line-height: 1.7; color: #c6d7ed; }
+.welcome-footer { font-size: 10px; letter-spacing: .16em; color: #8a9db7; border-top: 1px solid #748aa12e; padding-top: 22px; }
+.journey-mode .sidebar { display: none; }
+.journey-mode .view { max-width: 1440px; width: 100%; margin: auto; padding-top: 24px; }
+.journey-header { font-size: 12px; padding: 0 0 30px; }
+.journey-header a { text-decoration: none; color: #b6cae4; }
+.journey-steps { display: flex; border-block: 1px solid #2a3d55; padding: 0; }
+.journey-step { flex: 1; background: none; font: inherit; color: #8ca0bb; border: 0; border-bottom: 2px solid transparent; padding: 21px 12px; cursor: pointer; display: flex; align-items: center; gap: 14px; }
+.journey-step span { font-size: 11px; color: #7287a5; }
+.journey-step.active { color: #f0f7ff; border-bottom-color: #63a3ff; background: linear-gradient(0deg,#2b68b627,transparent); }
+.journey-step.active span { color: #93c2ff; }
+.stage-heading { padding: 43px 0 24px; }
+.stage-heading h1 { font-size: clamp(29px, 3.3vw, 46px); font-weight: 520; letter-spacing: -.045em; line-height: 1.15; }
+.stage-heading p.muted { margin-top: 15px; max-width: 700px; }
+.journey-columns { display: grid; grid-template-columns: 1.1fr 1fr; gap: 24px; align-items: start; }
+.glass-panel { border: 1px solid #38506b; border-top-color: #59728d; border-radius: 18px; padding: clamp(20px,3vw,32px); box-shadow: var(--shadow); }
+.glass-panel h2 { font-size: 20px; margin-bottom: 20px; font-weight: 500; }
+.glass-panel > .muted { margin-top: 18px; }
+.glass-panel > select { margin-bottom: 18px; }
+.choice-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 14px 0 24px; }
+.choice { background: #122138; color: #bacee7; border: 1px solid #3b516e; border-radius: 8px; padding: 9px 14px; font: inherit; font-size: 13px; cursor: pointer; }
+.choice.selected { border-color: #77aafa; background: #235b9b55; color: #edf6ff; box-shadow: 0 0 14px #347cea15; }
+.upload-panel { display: flex; flex-direction: column; gap: 13px; padding: 22px; border: 1px dashed #647d9d; border-radius: 12px; background: #07152577; margin-bottom: 22px; }
+.upload-panel input { max-width: 100%; font: inherit; font-size: 12px; }
+input::file-selector-button { border: 1px solid #536e91; border-radius: 6px; padding: 7px 12px; background: #1b3554; color: #e6f0ff; margin-right: 10px; }
+.character-grid { display: flex; overflow-x: auto; gap: 16px; padding: 0 0 24px; }
+.character-grid:empty { display: none; }
+.character-card { flex: 0 0 180px; border: 1px solid #3c5472; border-radius: 14px; padding: 0; overflow: hidden; color: var(--ink); background: #111f32; text-align: left; cursor: pointer; }
+.character-card.selected { border-color: #8bbcff; box-shadow: 0 0 24px #397df630; }
+.character-card img { width: 100%; height: 220px; object-fit: cover; display: block; }
+.character-card > div { padding: 14px; display: flex; flex-direction: column; font: 13px/1.5 inherit; }
+.character-card span { font-size: 11px; color: #a5bfdf; }
+.journey-actions { display: flex; justify-content: space-between; gap: 20px; align-items: center; border-top: 1px solid #263b56; padding: 24px 0; margin-top: 28px; }
+.journey-actions > .muted { font-size: 10px; letter-spacing: .15em; }
+.journey-status { color: #a9d0ff; padding-top: 20px; min-height: 40px; }
+.mock-notice { color: #edce91; background: #2c261f; border: 1px solid #655436; border-radius: 8px; padding: 8px 14px; font-size: 12px; }
+.framing-panel { display: flex; justify-content: center; padding: 24px; border: 1px solid #293e5b; border-radius: 16px; background: #030811; }
+.framing-preview { max-width: 100%; max-height: 440px; object-fit: cover; border: 1px solid #94bbef; border-radius: 4px; }
+.result-panel { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+.result-panel img, .result-panel video { width: 100%; max-height: 480px; object-fit: contain; background: #030811; border-radius: 12px; }
+.direction-prompt { min-height: 170px; }
+.render-btn { width: 100%; margin: 12px 0; }
+a.workspace-link { font-size: 13px; color: #a6c9fd; }
+audio { width: 100%; margin-bottom: 22px; }
+@media (max-width: 700px) {
+  .welcome-scene { padding: 22px; background-position: 66% center; }
+  .welcome-copy { padding: 70px 0 40px; }
+  .welcome-nav .muted, .welcome-footer > :last-child { display: none; }
+  .welcome-copy h1 { font-size: 57px; }
+  .entrances, .journey-columns { grid-template-columns: 1fr; }
+  .entrance { padding: 20px; gap: 10px; }
+  .journey-header { flex-wrap: wrap; gap: 10px; }
+  .journey-header .eyebrow { display: none; }
+  .journey-step { font-size: 11px; flex-direction: column; gap: 6px; padding: 14px 3px; }
+  .stage-heading { padding-top: 30px; }
+  .journey-actions { align-items: start; }
+  .journey-actions > .muted { display: none; }
+  .journey-actions > div { width: 100%; justify-content: space-between; }
+}
+@media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; } }

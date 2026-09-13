@@ -22,7 +22,7 @@ async def lifespan(app: FastAPI):
     await training.shutdown()
 
 
-app = FastAPI(title="Pleo", lifespan=lifespan)
+app = FastAPI(title="Creative workspace", lifespan=lifespan)
 
 
 def _strip_default_port(netloc: str) -> str:

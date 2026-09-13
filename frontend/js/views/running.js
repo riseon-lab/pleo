@@ -1,9 +1,8 @@
 // Running view: generation controls, live step viewer, queue, lightbox.
 import { api, apiBlob, onEvent } from '../api.js';
-import { encryptBytes, encryptJSON } from '../crypto.js';
 import { getParams, saveParams, getLoraStack, saveLoraStack, getUI, saveUI } from '../state.js';
 import { h, clear, toast, modal, lightbox, confirmModal, fmtBytes } from '../ui.js';
-import { assetMime, decryptedAssetURL, evictDecryptedAssetURL, saveReferenceAsset } from './assets.js';
+import { assetMime, decryptedAssetURL, evictDecryptedAssetURL, saveReferenceAsset, saveGeneratedResult } from './assets.js';
 
 // FHD presets are snapped to the models' 16px latent grid (1080 → 1072).
 const PRESETS = [
@@ -25,6 +24,7 @@ const WAN_VIDEO = {
   aspects: {
     source: { label: 'Source', detail: 'Keep framing' },
     '9:16': { label: 'Portrait 9:16', detail: 'Centre crop' },
+    '16:9': { label: 'Landscape 16:9', detail: 'Centre crop' },
   },
 };
 const SOURCE_MIMES = new Set(['image/png', 'image/jpeg', 'image/webp']);
@@ -322,12 +322,12 @@ export async function render(root) {
   function syncAspect() {
     if (isVideoKind(model.kind)) {
       const dimensions = videoSourceDimensions();
-      previewBox.style.aspectRatio = videoAspect === '9:16' ? '9 / 16' : dimensions
+      previewBox.style.aspectRatio = videoAspect !== 'source' ? videoAspect.replace(':', ' / ') : dimensions
         ? `${dimensions.width} / ${dimensions.height}` : '16 / 9';
     } else {
       previewBox.style.aspectRatio = `${+width.value || 16} / ${+height.value || 9}`;
     }
-    previewImg.style.objectFit = isVideoKind(model.kind) && videoAspect === '9:16' ? 'cover' : 'contain';
+    previewImg.style.objectFit = isVideoKind(model.kind) && videoAspect !== 'source' ? 'cover' : 'contain';
   }
 
   function renderVideoTier() {
@@ -388,15 +388,15 @@ export async function render(root) {
     if (ready) videoSourceImg.src = refFile.url;
     if (!refFile) {
       videoSourceMeta.textContent = 'JPG, PNG or WebP';
-      videoOutputLine.textContent = videoAspect === '9:16'
-        ? `${videoTier} tier · portrait 9:16 · centre crop`
+      videoOutputLine.textContent = videoAspect !== 'source'
+        ? `${videoTier} tier · ${videoAspect} · centre crop`
         : `Output follows the ${model.kind === 'video2video' ? 'driving video' : model.kind === 'motion2video' ? 'reference image' : 'start image'} aspect ratio.`;
       return;
     }
     const size = wanOutputSize();
     videoSourceMeta.textContent = `${refFile.name}${refFile.width ? ` · ${refFile.width}×${refFile.height}` : ''}`;
     videoOutputLine.textContent = size
-      ? `${videoTier} tier · ${size.width}×${size.height} output · ${videoAspect === '9:16' ? 'portrait centre crop' : 'source aspect preserved'}`
+      ? `${videoTier} tier · ${size.width}×${size.height} output · ${videoAspect !== 'source' ? `${videoAspect} centre crop` : 'source aspect preserved'}`
       : `${videoTier} tier · source aspect preserved`;
   }
 
@@ -406,15 +406,15 @@ export async function render(root) {
 
   function wanOutputSize() {
     const source = videoSourceDimensions();
-    if (videoAspect !== '9:16' && (!source?.width || !source?.height)) return null;
+    if (videoAspect === 'source' && (!source?.width || !source?.height)) return null;
     return wanOutputSizeFor(source?.width || 9, source?.height || 16);
   }
 
   function wanOutputSizeFor(sourceWidth, sourceHeight) {
     const area = (WAN_VIDEO.tiers[videoTier] || WAN_VIDEO.tiers['480p']).maxArea;
-    if (videoAspect === '9:16') {
+    if (videoAspect !== 'source') {
       const unit = Math.floor(Math.sqrt(area / (9 * 16)) / 16) * 16;
-      return { width: 9 * unit, height: 16 * unit };
+      return videoAspect === '9:16' ? { width: 9 * unit, height: 16 * unit } : { width: 16 * unit, height: 9 * unit };
     }
     const ratio = sourceHeight / sourceWidth;
     const height = Math.floor(Math.round(Math.sqrt(area * ratio)) / 16) * 16;
@@ -862,13 +862,7 @@ export async function render(root) {
         }
       }
       // Encrypt in the browser, upload ciphertext, then discard the server copy.
-      const encMeta = await encryptJSON({ ...meta, mime, saved: Date.now() });
-      const encBlob = await encryptBytes(bytes);
-      const entry = await api('/api/assets', { method: 'POST', body: encBlob, headers: {
-        'X-Pleo-Kind': 'generated', 'X-Pleo-Meta': encMeta, 'X-Pleo-Mime': mime,
-      } });
-      await api(`/api/results/${job.result_id}`, { method: 'DELETE' });
-      await api(`/api/jobs/${job.id}/asset`, { method: 'POST', body: { asset_id: entry.id } }).catch(() => { });
+      await saveGeneratedResult(job, bytes, meta, mime);
       if (!disposed) {
         toast('Saved to assets (encrypted)', 'success');
         refreshQueue();

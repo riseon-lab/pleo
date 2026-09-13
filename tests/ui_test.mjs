@@ -52,6 +52,7 @@ page.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()); }
 
 // ---- signup ----
 await page.goto(BASE);
+await page.getByRole('button', { name: /CLASSIC WORKSPACE/ }).click();
 await page.waitForSelector('#boot form', { timeout: 10000 });
 check('signup form on first boot', await page.locator('#boot button').textContent() === 'Create account');
 await page.fill('input[placeholder="Password"]', 'hunter22hunter22');

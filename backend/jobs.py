@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 from . import config, events, moderation, runner_manager
 from .auth import AUTHED, valid_token_str
 from .registry import get_model
+from .soundtrack import validate_audio, mix_audio
 from .util import new_id, path_inside
 
 router = APIRouter(prefix="/api", tags=["jobs"])
@@ -48,6 +49,9 @@ class GenerateBody(BaseModel):
     loras: list[LoraRef] = Field(default_factory=list)
     ref_image_b64: Optional[str] = None  # plaintext, transient, for edit/I2V models
     ref_video_b64: Optional[str] = None  # plaintext, transient, for driven video models
+    release_after_generate: bool = False
+    audio_b64: Optional[str] = Field(None, max_length=45_000_000)
+    audio_start: float = Field(0, ge=0, le=3600, allow_inf_nan=False)
     video_tier: Optional[str] = None
     video_aspect: Optional[str] = None
     num_frames: Optional[int] = Field(None, ge=1, le=193)
@@ -86,6 +90,15 @@ async def submit(body: GenerateBody):
         raise HTTPException(400, "This model does not accept a driving video")
     if is_driven and body.loras:
         raise HTTPException(400, "LoRAs are not supported by this video model")
+    audio_bytes = None
+    if body.audio_b64:
+        if not is_video:
+            raise HTTPException(400, "A soundtrack requires a video model")
+        try:
+            audio_bytes = base64.b64decode(body.audio_b64, validate=True)
+            await asyncio.to_thread(validate_audio, audio_bytes, body.audio_start)
+        except (ValueError, RuntimeError) as exc:
+            raise HTTPException(400, str(exc))
     lora_defaults = model.get("lora_defaults", {})
     if kind == "img2video" and len(body.loras) > lora_defaults.get("max_stack", 4):
         raise HTTPException(400, f"Wan supports at most {lora_defaults.get('max_stack', 4)} stacked LoRAs")
@@ -149,12 +162,12 @@ async def submit(body: GenerateBody):
         if video_tier not in tiers:
             raise HTTPException(400, f"video_tier must be one of: {', '.join(tiers)}")
         video_aspect = body.video_aspect or defaults.get("video_aspect", "source")
-        if video_aspect not in ("source", "9:16"):
-            raise HTTPException(400, "video_aspect must be source or 9:16")
+        if video_aspect not in ("source", "9:16", "16:9"):
+            raise HTTPException(400, "video_aspect must be source, 9:16 or 16:9")
         area = tiers[video_tier]
-        if video_aspect == "9:16":
+        if video_aspect in ("9:16", "16:9"):
             unit = int(math.sqrt(area / (9 * 16))) // mult * mult
-            width, height = 9 * unit, 16 * unit
+            width, height = (9 * unit, 16 * unit) if video_aspect == "9:16" else (16 * unit, 9 * unit)
         else:
             aspect = (height / width) if kind == "video2video" else (source_height / source_width)
             height = round(math.sqrt(area * aspect)) // mult * mult
@@ -192,6 +205,9 @@ async def submit(body: GenerateBody):
         "loras": lora_files,
         "ref_bytes": ref_bytes,
         "video_bytes": video_bytes,
+        "audio_bytes": audio_bytes,
+        "audio_start": body.audio_start,
+        "release_after_generate": body.release_after_generate,
     }
     if is_video:
         job.update({
@@ -288,6 +304,11 @@ async def _worker() -> None:
                         job["error"] = "Output blocked by moderation filter"
                         _finish(job)
                         continue
+                if mime == "video/mp4" and job.get("audio_bytes"):
+                    if job.get("release_after_generate"):
+                        await runner_manager.stop_runner()
+                    events.publish({"type": "step", "job_id": job["id"], "stage": "Mixing soundtrack", "step": 1, "total": 1})
+                    media = await asyncio.to_thread(mix_audio, media, job["audio_bytes"], job["audio_start"], config.MAX_VIDEO_ASSET_BYTES - 1024 * 1024)
                 result_id = new_id()
                 meta = {
                     "job_id": job["id"], "model_id": job["model_id"],
@@ -323,7 +344,7 @@ async def _worker() -> None:
             job["status"] = "error"
             job["error"] = str(e)[:500]
         finally:
-            if model.get("release_vram_after_generate") or job["status"] == "error":
+            if model.get("release_vram_after_generate") or job.get("release_after_generate") or job["status"] == "error":
                 try:
                     await runner_manager.stop_runner()
                 except Exception:
@@ -335,6 +356,7 @@ def _finish(job: dict) -> None:
     global _current
     job.pop("ref_bytes", None)
     job.pop("video_bytes", None)
+    job.pop("audio_bytes", None)
     if _current is job:
         _current = None
     _history.insert(0, job)
