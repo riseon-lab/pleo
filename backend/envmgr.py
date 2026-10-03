@@ -50,6 +50,21 @@ def _set_state(model_id: str, status: str, detail: str = "") -> None:
     events.publish({"type": "env", "model_id": model_id, "status": status, "detail": detail})
 
 
+def _run_pip(model_id: str, *args: str) -> None:
+    proc = subprocess.Popen(
+        [str(python_path(model_id)), "-m", "pip", *args],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert proc.stdout is not None
+    last_line = ""
+    for line in proc.stdout:
+        if line := line.strip():
+            last_line = line
+            _set_state(model_id, "installing", line[-200:])
+    if proc.wait() != 0:
+        raise RuntimeError(f"pip failed: {last_line[-250:] or 'no error output'}")
+
+
 def _create_env_worker(model: dict) -> None:
     model_id = model["id"]
     d = env_dir(model_id)
@@ -59,20 +74,12 @@ def _create_env_worker(model: dict) -> None:
             [sys.executable, "-m", "venv", "--system-site-packages", str(d)],
             check=True, capture_output=True, timeout=300,
         )
+        _set_state(model_id, "installing", "upgrading pip")
+        _run_pip(model_id, "install", "--upgrade", "pip")
         reqs = config.ROOT / "runners" / "reqs" / model["reqs"]
         if reqs.exists():
             _set_state(model_id, "installing", f"pip install -r {reqs.name}")
-            proc = subprocess.Popen(
-                [str(python_path(model_id)), "-m", "pip", "install", "-r", str(reqs)],
-                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
-            )
-            assert proc.stdout is not None
-            for line in proc.stdout:
-                line = line.strip()
-                if line:
-                    _set_state(model_id, "installing", line[-200:])
-            if proc.wait() != 0:
-                raise RuntimeError("pip install failed — see server logs")
+            _run_pip(model_id, "install", "-r", str(reqs))
         (d / ".pleo-ready").touch()
         with _lock:
             _states.pop(model_id, None)
