@@ -48,6 +48,8 @@ _lock = asyncio.Lock()
 
 AI_TOOLKIT_DIR = Path(os.environ.get("AI_TOOLKIT_DIR", "/workspace/ai-toolkit"))
 AI_TOOLKIT_REPO = "https://github.com/ostris/ai-toolkit"
+# Last revision before Qwen 3.8 made Python 3.12 and FLA mandatory at import time.
+AI_TOOLKIT_REF = "8cf43dd2cc1fe828884001aceeda044649d9abd0"
 _toolkit = {"status": "idle", "detail": ""}  # idle|cloning|installing|ready|error
 _toolkit_lock = threading.Lock()
 
@@ -101,10 +103,18 @@ def _toolkit_worker() -> None:
             if r.returncode != 0:
                 raise RuntimeError(f"git clone failed: {r.stderr[-300:]}")
         else:
-            _toolkit.update(status="cloning", detail="updating existing clone (git pull)")
+            _toolkit.update(status="cloning", detail="updating existing clone")
             pub()
-            subprocess.run(["git", "-C", str(AI_TOOLKIT_DIR), "pull", "--ff-only"],
+
+        r = subprocess.run(["git", "-C", str(AI_TOOLKIT_DIR), "fetch", "--depth", "1",
+                            "origin", AI_TOOLKIT_REF],
                            capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise RuntimeError(f"ai-toolkit fetch failed: {r.stderr[-300:]}")
+        r = subprocess.run(["git", "-C", str(AI_TOOLKIT_DIR), "checkout", "--detach",
+                            AI_TOOLKIT_REF], capture_output=True, text=True, timeout=300)
+        if r.returncode != 0:
+            raise RuntimeError(f"ai-toolkit checkout failed: {r.stderr[-300:]}")
 
         py = str(python_path("trainer"))
         _toolkit.update(status="installing", detail="pip install -r requirements.txt (this takes a few minutes)")

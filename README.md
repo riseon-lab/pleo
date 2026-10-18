@@ -36,10 +36,9 @@ docker run --gpus all -p 3000:3000 -v /your/volume:/workspace \
   private, use `PLEO_REPO=https://<token>@github.com/riseon-lab/pleo.git`.
 - All persistent data (weights cache, venvs, encrypted assets, LoRAs,
   datasets, training runs) lives under `/workspace/pleo-data`.
-- For real LoRA training, also clone ai-toolkit onto the volume once:
-  `git clone https://github.com/ostris/ai-toolkit /workspace/ai-toolkit`
-  and install its requirements into the trainer venv (see
-  `runners/reqs/trainer.txt`).
+- For real LoRA training, create the trainer environment and install ai-toolkit
+  from the Training page. The installer checks out the revision compatible with
+  the container's Python and Torch stack.
 
 ## Security model
 
