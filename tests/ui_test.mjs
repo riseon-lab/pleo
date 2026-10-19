@@ -50,6 +50,19 @@ const pageErrors = [];
 page.on('pageerror', e => pageErrors.push(String(e)));
 page.on('console', m => { if (m.type() === 'error') pageErrors.push(m.text()); });
 
+async function navigate(path) {
+  const link = page.locator(`.nav-item[data-path="${path}"]`);
+  if (!await link.isVisible()) await page.click('#collapse-btn');
+  await link.click();
+}
+
+async function setPrompt(value) {
+  const details = page.locator('.studio-prompt-details');
+  if (!await details.getAttribute('open').then(v => v !== null)) await details.locator('summary').click();
+  if (await page.locator('.main-prompt').evaluate(el => el.readOnly)) await page.getByRole('button', { name: 'Use manual prompt', exact: true }).click();
+  await page.locator('.main-prompt').fill(value);
+}
+
 // ---- signup ----
 await page.goto(BASE);
 await page.waitForSelector('#boot form', { timeout: 10000 });
@@ -65,9 +78,11 @@ check('entered app after signup', true);
 await page.waitForSelector('.run-layout', { timeout: 10000 });
 check('saved non-Wan LoRA loads when model defaults are null',
   (await page.locator('.lora-chip').textContent()).includes('saved-disabled.safetensors'));
-await page.fill('textarea[placeholder="Prompt…"]', 'a lighthouse at dusk, oil painting');
+check('studio opens with icon-based directions', await page.locator('.direction-choice svg').count() >= 6);
+await setPrompt('a lighthouse at dusk, oil painting');
+await page.locator('.studio-advanced summary').click();
 await page.fill('.grid2 label:has(span:text("Steps")) input', '4');
-await page.selectOption('select:below(span:text("Resolution"))', 'Portrait 832 × 1216');
+await page.locator('.studio-command select').selectOption('Portrait 832 × 1216');
 const box = await page.locator('.preview-box').boundingBox();
 check('preview box is portrait (aspect matches 832x1216)', box && box.height > box.width, JSON.stringify(box));
 await page.click('button:text("Generate")');
@@ -95,7 +110,7 @@ await page.screenshot({ path: SHOTS + '04-lightbox.png' });
 await page.keyboard.press('Escape');
 
 // ---- assets: decrypt on the fly ----
-await page.click('.nav-item[data-path="assets"]');
+await navigate('assets');
 await page.waitForSelector('.asset-tile img', { timeout: 15000 });
 await page.waitForFunction(() => {
   const i = document.querySelector('.asset-tile img');
@@ -117,7 +132,7 @@ await page.click('h1:text("Assets")'); // click-away closes
 check('tile menu closes on outside click', await page.locator('.tile-pop:not([hidden])').count() === 0);
 
 // ---- models ----
-await page.click('.nav-item[data-path="models"]');
+await navigate('models');
 await page.waitForSelector('.model-card');
 const cards = await page.locator('.model-card').count();
 check('7 model cards', cards === 7, String(cards));
@@ -126,7 +141,7 @@ check('mock mode badges shown', chips.some(c => c.includes('mock')), chips.join(
 await page.screenshot({ path: SHOTS + '06-models.png' });
 
 // ---- Wan image-to-video controls + encrypted MP4 result ----
-await page.click('.nav-item[data-path="running"]');
+await navigate('running');
 await page.selectOption('label:has(span:text("Model")) select', 'wan-2.2-i2v-a14b-lightning');
 check('Wan quality profile shown', await page.locator('.wan-baked:visible').textContent()
   .then(t => t.includes('CFG 1 / 1') && t.includes('81 frames')));
@@ -175,17 +190,17 @@ await page.click('.video-fps button:has-text("12 fps")');
 check('Wan timing pills calculate a valid long clip',
   (await page.locator('.wan-baked').textContent()).includes('97 frames') &&
   (await page.locator('button:text("Generate 8s video")').count()) === 1);
-await page.fill('textarea[placeholder="Prompt…"]', 'slow cinematic push-in');
+await setPrompt('slow cinematic push-in');
 await page.click('button:text("Generate 8s video")');
 await page.waitForSelector('.toast:has-text("Video generation started")');
-await page.click('.nav-item[data-path="models"]');
+await navigate('models');
 await page.waitForFunction(async () => {
   const token = sessionStorage.getItem('pleo-token');
   const response = await fetch('/api/queue', { headers: { Authorization: `Bearer ${token}` } });
   const queue = await response.json();
   return queue.history.some(j => j.model_id === 'wan-2.2-i2v-a14b-lightning' && j.status === 'done' && j.result_id && !j.asset_id);
 }, { timeout: 60000 });
-await page.click('.nav-item[data-path="running"]');
+await navigate('running');
 await page.waitForSelector('.toast-success:has-text("Saved to assets")', { timeout: 20000 });
 await page.waitForSelector('.preview-box video:not([hidden])', { timeout: 10000 });
 await page.waitForFunction(() => document.querySelector('.preview-box video')?.readyState >= 1);
@@ -227,12 +242,12 @@ check('VACE exposes source video plus editable guidance controls',
   (await page.locator('.wan-baked:visible').textContent()).includes('VACE 14B'));
 await page.selectOption('label:has(span:text("Model")) select', 'z-image-base');
 
-await page.click('.nav-item[data-path="assets"]');
+await navigate('assets');
 await page.waitForFunction(() => document.querySelector('.asset-tile video')?.readyState >= 1, { timeout: 15000 });
 check('encrypted MP4 decrypts and remains playable in Assets', await page.locator('.asset-tile video').count() === 1);
 
 // ---- loras ----
-await page.click('.nav-item[data-path="loras"]');
+await navigate('loras');
 await page.waitForSelector('.tabs');
 check('local LoRAs has an upload button', await page.locator('button:text-is("Upload LoRA")').count() === 1);
 await page.locator('input[type=file][accept=".safetensors"]').setInputFiles({
@@ -265,7 +280,7 @@ await page.screenshot({ path: SHOTS + '07-settings.png' });
 await page.reload();
 await page.waitForSelector('#app:not([hidden])', { timeout: 15000 });
 check('session survives reload (no re-login)', true);
-await page.click('.nav-item[data-path="running"]');
+await navigate('running');
 await page.waitForSelector('.run-layout');
 const promptVal = await page.inputValue('textarea[placeholder="Prompt…"]');
 check('prompt persisted across reload', promptVal.includes('lighthouse'), promptVal);
@@ -276,17 +291,15 @@ const keysVal = await (async () => {
 })();
 check('api key decrypts after reload', keysVal === 'hf_testkey123', keysVal);
 
-// ---- sidebar collapse + mobile ----
-await page.click('#collapse-btn');
-check('sidebar collapses', await page.locator('#app.collapsed').count() === 1);
-await page.click('#collapse-btn');
+// ---- responsive navigation ----
 await page.setViewportSize({ width: 390, height: 844 });
-await page.click('.nav-item[data-path="running"]');
+await navigate('running');
 await page.waitForTimeout(400);
 const sideBox = await page.locator('#sidebar').boundingBox();
-check('mobile: nav docks to bottom', sideBox && sideBox.y > 700, JSON.stringify(sideBox));
+check('mobile: navigation stays at the top', sideBox && sideBox.y === 0, JSON.stringify(sideBox));
 const maxRight = () => Math.max(...[...document.querySelectorAll('*')]
   .filter(el => el.getBoundingClientRect().width > 50)
+  .filter(el => !el.closest('.builder-tabs, .choice-grid, .builder-sections'))
   .map(el => el.getBoundingClientRect().right));
 const overflow = await page.evaluate(`(${maxRight})() - window.innerWidth`);
 check('mobile: no element wider than viewport', overflow <= 1, `${Math.round(overflow)}px overflow`);
@@ -297,7 +310,7 @@ check('mobile: main prompt has a larger writing area', mobilePrompt && mobilePro
 await page.screenshot({ path: SHOTS + '08-mobile.png' });
 
 // ---- data studio ----
-await page.click('.nav-item[data-path="data-studio"]');
+await navigate('data-studio');
 await page.waitForSelector('.notice');
 check('data studio plaintext notice shown', (await page.locator('.notice').textContent()).includes('unencrypted'));
 await page.fill('input[placeholder="New dataset name"]', 'ui set');
@@ -324,7 +337,7 @@ check('auto-caption filled with trigger word', capVal.startsWith('uiword1'), cap
 await page.screenshot({ path: SHOTS + '09-datastudio.png' });
 
 // ---- training ----
-await page.click('.nav-item[data-path="training"]');
+await navigate('training');
 await page.waitForSelector('h3:text("New LoRA training job")');
 await page.fill('input[placeholder="e.g. my-character-v1"]', 'ui lora');
 await page.fill('label:has(span:text("Total steps")) input', '500');

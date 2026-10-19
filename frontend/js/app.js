@@ -3,6 +3,7 @@ import { api, setToken, getToken, setUnauthorizedHandler, connectEvents, disconn
 import * as cryp from './crypto.js';
 import { getUI, saveUI } from './state.js';
 import { h, clear, toast } from './ui.js';
+import { icon } from './studio/icons.js';
 import * as running from './views/running.js';
 import * as models from './views/models.js';
 import * as assets from './views/assets.js';
@@ -11,21 +12,11 @@ import * as settings from './views/settings.js';
 import * as datastudio from './views/datastudio.js';
 import * as training from './views/training.js';
 
-const ICONS = {
-  running: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="6 3 20 12 6 21 6 3"/></svg>',
-  models: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></svg>',
-  assets: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>',
-  loras: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" y1="21" x2="4" y2="14"/><line x1="4" y1="10" x2="4" y2="3"/><line x1="12" y1="21" x2="12" y2="12"/><line x1="12" y1="8" x2="12" y2="3"/><line x1="20" y1="21" x2="20" y2="16"/><line x1="20" y1="12" x2="20" y2="3"/><line x1="1" y1="14" x2="7" y2="14"/><line x1="9" y1="8" x2="15" y2="8"/><line x1="17" y1="16" x2="23" y2="16"/></svg>',
-  data: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 1.66-4 3-9 3s-9-1.34-9-3"/><path d="M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5"/></svg>',
-  training: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>',
-  settings: '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>',
-};
-
 const ROUTES = [
-  { path: 'running', label: 'Running', icon: 'running', view: running },
+  { path: 'running', label: 'Create', icon: 'running', view: running },
   { path: 'models', label: 'Models', icon: 'models', view: models },
-  { path: 'assets', label: 'Assets', icon: 'assets', view: assets },
-  { path: 'loras', label: 'LoRAs', icon: 'loras', view: loras },
+  { path: 'assets', label: 'Library', icon: 'assets', view: assets },
+  { path: 'loras', label: 'LoRA library', icon: 'loras', view: loras },
   { path: 'data-studio', label: 'Data Studio', icon: 'data', view: datastudio },
   { path: 'training', label: 'Training', icon: 'training', view: training },
 ];
@@ -142,18 +133,18 @@ function buildSidebar() {
   const nav = clear(document.getElementById('side-nav'));
   for (const r of ROUTES) {
     const item = h('button', { class: 'nav-item', dataset: { path: r.path }, onclick: () => { location.hash = `#/${r.path}`; } });
-    item.insertAdjacentHTML('beforeend', ICONS[r.icon]);
+    item.append(icon({ running: 'sparkles', models: 'box', assets: 'photo', loras: 'adjustments', data: 'database', training: 'school' }[r.icon]));
     item.append(h('span', { class: 'nav-label' }, r.label));
     nav.append(item);
   }
   const foot = clear(document.getElementById('side-foot'));
-  const sItem = h('button', { class: 'nav-item', dataset: { path: 'settings' }, onclick: () => { location.hash = '#/settings'; } });
-  sItem.insertAdjacentHTML('beforeend', ICONS.settings);
+  const sItem = h('button', { class: 'nav-item', 'aria-label': 'Settings', dataset: { path: 'settings' }, onclick: () => { location.hash = '#/settings'; } });
+  sItem.append(icon('settings'));
   sItem.append(h('span', { class: 'nav-label' }, 'Settings'));
   foot.append(sItem);
   document.getElementById('collapse-btn').onclick = () => {
-    const collapsed = appEl.classList.toggle('collapsed');
-    saveUI({ collapsed });
+    const expanded = appEl.classList.toggle('nav-open');
+    document.getElementById('collapse-btn').setAttribute('aria-expanded', String(expanded));
   };
 }
 
@@ -165,6 +156,9 @@ async function route() {
   if (currentPath === entry.path) return;
   if (currentCleanup) { try { currentCleanup(); } catch { } currentCleanup = null; }
   currentPath = entry.path;
+  appEl.classList.remove('nav-open');
+  document.getElementById('collapse-btn').setAttribute('aria-expanded', 'false');
+  viewType(entry.path);
   saveUI({ route: entry.path });
   document.querySelectorAll('.nav-item').forEach(el =>
     el.classList.toggle('active', el.dataset.path === entry.path));
@@ -177,6 +171,8 @@ async function route() {
     toast(e.message, 'error');
   }
 }
+
+function viewType(path) { document.body.classList.toggle('is-studio', path === 'running'); }
 
 export function logoutAndReload() {
   api('/api/auth/logout', { method: 'POST' }).catch(() => { });

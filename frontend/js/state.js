@@ -22,3 +22,9 @@ export function saveLoraStack(modelId, stack) { write(`pleo-loras:${modelId}`, s
 
 export function getUI() { return read('pleo-ui', {}); }
 export function saveUI(patch) { write('pleo-ui', { ...getUI(), ...patch }); }
+
+export function getStudioLooks() {
+  const looks = read('pleo-studio-looks', []);
+  return Array.isArray(looks) ? looks.filter(look => look && typeof look.id === 'string' && typeof look.modelId === 'string') : [];
+}
+export function saveStudioLooks(looks) { write('pleo-studio-looks', looks); }

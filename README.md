@@ -1,5 +1,21 @@
 # Pleo
 
+The interface opens into Character Studio: an editorial character preview and
+an icon-based prompt workbench. Choose from 160 camera, scene, action, pose,
+outfit, expression, lighting and detail directions, add a LoRA trigger and
+optional extra instructions, then review the exact prompt before generation.
+Manual prompts and all existing image/video controls remain available.
+
+LoRA stacking keeps per-file strengths and enable switches, including Wan's
+separate high/low strengths. **Save direction** stores the recipe, model,
+generation settings and stack in the current browser. These are local presets,
+not trained characters; clearing browser storage removes them.
+
+Create, Models, Library, LoRA library, Data Studio, Training and Settings share
+the new theme. On phones, Menu opens navigation and the generation controls
+remain pinned to the bottom. The opening portrait is labelled as an example;
+live generation replaces it with the actual output.
+
 Lightweight local model loader & runner for RunPod. FastAPI backend + vanilla
 JS frontend on port **3000**, per-model venv isolation, browser-side (E2E)
 encryption of assets and API keys. See `plan.md` for the full spec.

@@ -6,6 +6,7 @@ export function h(tag, attrs = {}, ...children) {
     if (k === 'class') el.className = v;
     else if (k === 'dataset') Object.assign(el.dataset, v);
     else if (k.startsWith('on') && typeof v === 'function') el.addEventListener(k.slice(2), v);
+    else if (k.startsWith('aria-') && typeof v === 'boolean') el.setAttribute(k, String(v));
     else if (v === true) el.setAttribute(k, '');
     else if (v !== false && v != null) el.setAttribute(k, v);
   }
@@ -36,7 +37,7 @@ export function toast(message, kind = 'info', ms = 3500) {
 
 export function modal(title, content, { wide = false } = {}) {
   const overlay = h('div', { class: 'overlay', onclick: (e) => { if (e.target === overlay) close(); } });
-  const box = h('div', { class: `modal${wide ? ' modal-wide' : ''}` },
+  const box = h('div', { class: `modal${wide ? ' modal-wide' : ''}`, role: 'dialog', 'aria-modal': true, 'aria-label': title },
     h('div', { class: 'modal-head' },
       h('h3', {}, title),
       h('button', { class: 'icon-btn', 'aria-label': 'Close', onclick: () => close() }, '✕')),

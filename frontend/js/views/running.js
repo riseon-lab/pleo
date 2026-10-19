@@ -1,15 +1,19 @@
 // Running view: generation controls, live step viewer, queue, lightbox.
 import { api, apiBlob, onEvent } from '../api.js';
 import { encryptBytes, encryptJSON } from '../crypto.js';
-import { getParams, saveParams, getLoraStack, saveLoraStack, getUI, saveUI } from '../state.js';
+import { getParams, saveParams, getLoraStack, saveLoraStack, getUI, saveUI, getStudioLooks, saveStudioLooks } from '../state.js';
 import { h, clear, toast, modal, lightbox, confirmModal, fmtBytes } from '../ui.js';
 import { assetMime, decryptedAssetURL, evictDecryptedAssetURL, saveReferenceAsset } from './assets.js';
+import { promptBuilder } from '../studio/builder.js';
+import { composePrompt, selectedDirections, DEFAULT_SELECTIONS } from '../studio/catalog.js';
+import { icon } from '../studio/icons.js';
 
 // FHD presets are snapped to the models' 16px latent grid (1080 → 1072).
 const PRESETS = [
   { label: 'Square 512 × 512', w: 512, h: 512 },
   { label: 'Square 1024 × 1024', w: 1024, h: 1024 },
   { label: 'Portrait 832 × 1216', w: 832, h: 1216 },
+  { label: 'Social portrait 4:5 · 896 × 1120', w: 896, h: 1120 },
   { label: 'Landscape 1216 × 832', w: 1216, h: 832 },
   { label: 'Portrait FHD 1072 × 1920', w: 1072, h: 1920 },
   { label: 'Landscape FHD 1920 × 1072', w: 1920, h: 1072 },
@@ -57,6 +61,7 @@ export async function render(root) {
 
   // ---------- controls ----------
   const modelSel = h('select', {
+    id: 'studio-model', 'aria-label': 'Model',
     onchange: () => {
       persist();
       modelId = modelSel.value;
@@ -71,6 +76,24 @@ export async function render(root) {
   const prompt = h('textarea', { class: 'main-prompt', placeholder: 'Prompt…', oninput: persist });
   const promptHelp = h('p', { class: 'muted field-help', hidden: true }, 'Describe the action and camera movement. This distilled CFG 1 profile does not use a negative prompt.');
   const promptField = h('label', { class: 'field' }, h('span', {}, 'Prompt'), prompt, promptHelp);
+  const builder = promptBuilder({ value: initialRecipe(params), onChange: () => { syncPrompt(); persist(); } });
+  const character = h('input', { type: 'text', maxlength: 80, placeholder: 'Name this character', 'aria-label': 'Character name', oninput: () => {
+    builder.patch({ character: character.value }); persist();
+  } });
+  const identity = h('input', { type: 'text', maxlength: 250, placeholder: 'LoRA trigger word or subject', title: 'Use your character LoRA’s trigger word here.', 'aria-label': 'Character trigger or subject', oninput: () => {
+    builder.patch({ identity: identity.value }); syncPrompt(); persist();
+  } });
+  const extras = h('input', { type: 'text', maxlength: 3000, placeholder: 'Add a detail in your own words…', 'aria-label': 'Extra details', oninput: () => {
+    builder.patch({ extra: extras.value }); syncPrompt(); persist();
+  } });
+  const modeButton = h('button', { class: 'text-btn', onclick: () => {
+    builder.patch({ mode: builder.value.mode === 'manual' ? 'builder' : 'manual' }); syncPrompt(); persist();
+  } });
+  const promptMode = h('span', { class: 'muted' });
+  const promptDetails = h('details', { class: 'studio-prompt-details' },
+    h('summary', {}, icon('file-text'), 'View final prompt', promptMode),
+    h('div', { class: 'prompt-content' },
+      h('div', { class: 'row between' }, h('p', { class: 'muted' }, 'This exact prompt is sent to the selected model.'), modeButton), promptField));
   const negative = h('textarea', { placeholder: 'Negative prompt (optional)', style: 'min-height:48px', oninput: persist });
   const negativeField = h('label', { class: 'field' }, h('span', {}, 'Negative prompt'), negative);
   const steps = num({ min: 1, max: 200, step: 1, oninput: () => { persist(); renderVideoTiming(); } });
@@ -79,6 +102,7 @@ export async function render(root) {
   const width = num({ min: 64, max: 2048, step: 8, oninput: () => { presetSel.value = 'custom'; persist(); syncAspect(); } });
   const height = num({ min: 64, max: 2048, step: 8, oninput: () => { presetSel.value = 'custom'; persist(); syncAspect(); } });
   const presetSel = h('select', {
+    'aria-label': 'Output format',
     onchange: () => {
       const p = PRESETS.find(p => p.label === presetSel.value);
       if (p) { width.value = p.w; height.value = p.h; persist(); syncAspect(); }
@@ -190,32 +214,35 @@ export async function render(root) {
   const loraField = h('div', { class: 'field' },
     loraTitle, loraHelp, loraSummary, h('div', { style: 'margin-top:8px' }, loraBtn));
 
-  const genBtn = h('button', { class: 'btn', style: 'width:100%', onclick: submit }, 'Generate');
-
-  const controls = h('div', { class: 'card' },
-    h('label', { class: 'field' }, h('span', {}, 'Model'), modelSel),
-    wanControls,
-    promptField,
-    negativeField,
-    stepCfgFields,
-    resolutionField,
-    dimensionFields,
-    seedField,
-    refField,
-    loraField,
-    genBtn);
+  const genBtn = h('button', { class: 'btn studio-generate', onclick: submit }, 'Generate image');
+  const savedLooks = h('div', { class: 'studio-looks' });
+  const controls = h('aside', { class: 'studio-character', 'aria-label': 'Character and model' },
+    h('div', { class: 'section-eyebrow' }, 'YOUR CAST'),
+    h('div', { class: 'character-heading' }, icon('user-circle'), h('span', {}, 'Character direction')),
+    h('label', { class: 'field' }, h('span', {}, 'Character name'), character),
+    h('label', { class: 'field' }, h('span', {}, 'Trigger / subject'), identity,
+      h('p', { class: 'muted field-help' }, 'Use your character LoRA’s trigger word here.')),
+    h('label', { class: 'field' }, h('span', {}, 'Model'), modelSel), loraField,
+    h('div', { class: 'character-save-row' },
+      h('button', { class: 'btn ghost small', onclick: saveLook }, icon('bookmark'), 'Save direction')),
+    savedLooks, refField, wanControls);
+  const advanced = h('details', { class: 'studio-advanced', id: 'studio-advanced' },
+    h('summary', {}, icon('adjustments'), 'Generation settings', h('span', { class: 'muted' }, 'Seed, steps, guidance & dimensions')),
+    h('div', { class: 'advanced-body' }, negativeField, stepCfgFields, dimensionFields, seedField));
 
   // ---------- viewer ----------
   const previewImg = h('img', { alt: 'preview', hidden: true });
   const previewVideo = h('video', { controls: true, playsinline: true, loop: true, preload: 'metadata', hidden: true });
-  const previewEmpty = h('div', { class: 'preview-empty' }, 'Generations appear here. Live noise previews stream in step by step.');
+  const emptyNote = h('span', { class: 'studio-example-label' }, 'Studio example · create your own below');
+  const previewEmpty = h('div', { class: 'preview-empty studio-example' },
+    h('img', { src: '/assets/studio-example.jpg', alt: 'Example editorial portrait in a black top and tailored gray trousers' }), emptyNote);
   const previewBox = h('div', { class: 'preview-box' }, previewImg, previewVideo, previewEmpty);
   const progressBar = h('div', {});
   const progressWrap = h('div', { class: 'progress', style: 'visibility:hidden' }, progressBar);
   const statusLine = h('div', { class: 'row between' },
     h('span', { class: 'muted', id: 'gen-status' }, 'Idle'),
     h('button', { class: 'btn ghost small', hidden: true, id: 'cancel-btn', onclick: cancelCurrent }, 'Cancel'));
-  const viewer = h('div', { class: 'card viewer-card' },
+  const viewer = h('div', { class: 'viewer-card studio-viewer' },
     h('div', { class: 'preview-shell' }, previewBox),
     progressWrap, statusLine);
 
@@ -229,21 +256,103 @@ export async function render(root) {
       } catch (e) { toast(e.message, 'error'); }
     },
   }, 'Clear history');
-  const queueCard = h('div', { class: 'card section-gap' },
-    h('div', { class: 'row between' }, h('h3', {}, 'Queue'), clearBtn), queueList);
+  const queueCount = h('span', { class: 'muted' }, 'No active jobs');
+  const queueCard = h('details', { class: 'studio-queue', id: 'studio-queue' },
+    h('summary', {}, icon('stack-2'), 'Queue & recent generations', queueCount),
+    h('div', { class: 'queue-body' }, h('div', { class: 'row between' }, h('h3', {}, 'Queue'), clearBtn), queueList));
+  const directionList = h('div', { class: 'direction-summary', 'aria-live': 'polite' });
+  const modeSwitch = h('div', { class: 'studio-mode-switch', role: 'group', 'aria-label': 'Generation type' },
+    ...['Image', 'Video'].map((label, i) => h('button', { 'aria-pressed': false, onclick: () => {
+      const wantedVideo = Boolean(i);
+      if (isVideoKind(model.kind) === wantedVideo) return;
+      const remembered = getUI()[wantedVideo ? 'studioVideoModel' : 'studioImageModel'];
+      const next = models.find(m => m.id === remembered && isVideoKind(m.kind) === wantedVideo)
+        || models.find(m => isVideoKind(m.kind) === wantedVideo);
+      if (next) { modelSel.value = next.id; modelSel.dispatchEvent(new Event('change')); }
+    } }, icon(i ? 'video' : 'photo'), label)));
+  const directionPanel = h('aside', { class: 'studio-direction', 'aria-label': 'Selected direction' },
+    h('div', { class: 'section-eyebrow' }, 'YOUR DIRECTION'), directionList, modeSwitch,
+    h('button', { class: 'studio-queue-link', onclick: () => { queueCard.open = true; queueCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
+      icon('stack-2'), 'View queue & results'),
+    h('p', { class: 'muted studio-note' }, 'Fine-tune your selections, then generate. Your preview updates when the model renders.'));
 
   const badgeHost = h('span', {}, runnerBadge(modelsRes.runner, models));
-  root.append(h('div', { class: 'view-head' }, h('h1', {}, 'Running'), badgeHost),
-    h('div', { class: 'run-layout' },
-      controls,
-      h('div', {}, viewer, queueCard)));
+  root.append(h('div', { class: 'view-head studio-head' },
+    h('div', {}, h('span', { class: 'section-eyebrow' }, 'THE CREATION ROOM'),
+      h('h1', {}, 'Character ', h('span', { class: 'heading-slash' }, '/'), ' 001')), badgeHost),
+    h('div', { class: 'run-layout studio-stage' }, controls, viewer, directionPanel),
+    builder.element,
+    h('div', { class: 'studio-command' },
+      h('label', { class: 'studio-extra' }, h('span', {}, 'Extra details'), extras),
+      h('div', { class: 'studio-command-actions' }, h('a', { class: 'studio-settings-link', 'aria-label': 'Generation settings', href: '#studio-advanced', onclick: e => {
+        e.preventDefault(); advanced.open = !advanced.open;
+        if (advanced.open) advanced.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+      } }, icon('adjustments'), h('span', {}, 'Settings')), resolutionField, genBtn)),
+    promptDetails, advanced, queueCard);
 
   syncInputs();
+  renderSavedLooks();
   renderQueue(queueRes);
 
   // ---------- behavior ----------
   function defaultsOf(m) {
     return { prompt: '', negative: '', ...m.defaults };
+  }
+
+  function initialRecipe(saved) {
+    return saved.studio || { selections: DEFAULT_SELECTIONS, mode: saved.prompt?.trim() ? 'manual' : 'builder' };
+  }
+
+  function syncPrompt() {
+    const manual = builder.value.mode === 'manual';
+    prompt.readOnly = !manual;
+    if (!manual) prompt.value = composePrompt(builder.value);
+    promptMode.textContent = manual ? 'Manual prompt' : 'Built from your selections';
+    modeButton.textContent = manual ? 'Use prompt builder' : 'Use manual prompt';
+    extras.disabled = manual;
+    if (manual) promptDetails.open = true;
+    clear(directionList);
+    if (manual) directionList.append(h('p', { class: 'muted' }, 'Manual prompt active. Choose any direction below to switch back to the builder.'));
+    else {
+      const selected = selectedDirections(builder.value);
+      for (const item of selected.slice(0, 7)) directionList.append(h('div', {}, icon(item.icon), h('span', {}, item.label)));
+      if (selected.length > 7) directionList.append(h('small', { class: 'muted' }, `+ ${selected.length - 7} more details`));
+      if (!selected.length) directionList.append(h('p', { class: 'muted' }, 'Choose a direction from the workbench below.'));
+    }
+  }
+
+  function saveLook() {
+    const name = h('input', { type: 'text', maxlength: 80, value: character.value || 'Untitled direction', 'aria-label': 'Direction name' });
+    const form = h('form', { onsubmit: event => {
+      event.preventDefault();
+      if (!name.value.trim()) return;
+      persist();
+      saveStudioLooks([...getStudioLooks(), { id: crypto.randomUUID(), name: name.value.trim(), modelId,
+        params: getParams(modelId, defaultsOf(model)), stack: loraStack }]);
+      picker.close(); renderSavedLooks(); toast('Direction and LoRA stack saved on this browser', 'success');
+    } }, h('p', { class: 'muted' }, 'Saves your selections, generation settings and full LoRA stack in this browser. It does not create or train a new LoRA.'),
+    h('label', { class: 'field' }, h('span', {}, 'Direction name'), name), h('button', { class: 'btn', type: 'submit' }, 'Save direction'));
+    const picker = modal('Save character direction', form);
+    name.focus();
+  }
+
+  function renderSavedLooks() {
+    clear(savedLooks);
+    for (const look of getStudioLooks()) {
+      savedLooks.append(h('div', { class: 'saved-look-row' },
+        h('button', { class: 'saved-look', onclick: () => {
+          const target = models.find(m => m.id === look.modelId);
+          if (!target) return toast('The model for this direction is no longer configured', 'error');
+          persist(); modelId = target.id; model = target; modelSel.value = modelId;
+          params = { ...defaultsOf(model), ...look.params };
+          loraStack = normalizeStack(look.stack, model.lora_defaults);
+          saveLoraStack(modelId, loraStack); saveUI({ selectedModel: modelId }); syncInputs(); persist();
+          toast(`Loaded ${look.name}`, 'success');
+        } }, icon('user-circle'), h('span', {}, look.name)),
+        h('button', { class: 'icon-btn', 'aria-label': `Remove saved direction ${look.name}`, onclick: () => {
+          saveStudioLooks(getStudioLooks().filter(item => item.id !== look.id)); renderSavedLooks();
+        } }, icon('x'))));
+    }
   }
 
   function persist() {
@@ -256,14 +365,21 @@ export async function render(root) {
       video_seconds: videoSeconds,
       num_frames: videoFrameCount(),
       fps: videoFps,
+      studio: builder.value,
     });
   }
 
   function syncInputs() {
     const isVideo = isVideoKind(model.kind);
+    saveUI({ selectedModel: modelId, [isVideo ? 'studioVideoModel' : 'studioImageModel']: modelId });
     const isDriven = isDrivenKind(model.kind);
     const isLockedVideo = model.kind === 'img2video' || model.kind === 'motion2video';
     prompt.value = params.prompt ?? '';
+    builder.set(initialRecipe(params));
+    character.value = builder.value.character;
+    identity.value = builder.value.identity;
+    extras.value = builder.value.extra;
+    syncPrompt();
     negative.value = params.negative ?? '';
     steps.value = params.steps ?? 4;
     cfg.value = params.cfg ?? 1;
@@ -306,10 +422,11 @@ export async function render(root) {
     wanInfoDescription.textContent = model.kind === 'img2video' ? '2026 high-noise + low-noise quality checkpoints'
       : model.kind === 'motion2video' ? 'Raw-video performance transfer · 10-step distilled profile'
         : 'Source-guided whole-shot recreation · reference image conditioned';
-    genBtn.textContent = isVideo ? 'Generate video' : 'Generate';
-    previewEmpty.textContent = isVideo
+    genBtn.textContent = isVideo ? 'Generate video' : 'Generate image';
+    [...modeSwitch.children].forEach((button, i) => button.setAttribute('aria-pressed', String(Boolean(i) === isVideo)));
+    emptyNote.textContent = isVideo
       ? `Your video appears here. ${isDriven ? 'The guide stays local and transient while Wan works.' : 'The start frame stays visible while Wan works.'}`
-      : 'Generations appear here. Live noise previews stream in step by step.';
+      : 'Studio example · create your own below';
     renderVideoTier();
     renderVideoAspect();
     renderVideoTiming();
@@ -590,7 +707,7 @@ export async function render(root) {
       }
       if (!loraStack.length) stackList.append(h('p', { class: 'muted' }, 'Nothing imported — add from the library below.'));
       for (const l of loraStack) {
-        const check = h('input', { type: 'checkbox', checked: l.enabled, title: 'Active in generations' });
+        const check = h('input', { type: 'checkbox', checked: l.enabled, title: 'Active in generations', 'aria-label': `Use ${l.file}` });
         check.onchange = () => { l.enabled = check.checked; persistStack(); };
         const remove = h('button', {
           class: 'icon-btn', 'aria-label': `Remove ${l.file} from stack`, onclick: () => {
@@ -611,7 +728,7 @@ export async function render(root) {
             h('label', {}, h('span', {}, 'High · motion'), high, highValue),
             h('label', {}, h('span', {}, 'Low · detail'), low, lowValue), remove);
         } else {
-          const slider = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: Math.max(0, l.strength) });
+          const slider = h('input', { type: 'range', min: 0, max: 2, step: 0.05, value: Math.max(0, l.strength), 'aria-label': `${l.file} strength` });
           const valLabel = h('span', { class: 'mono', style: 'width:48px;text-align:right' }, l.strength.toFixed(2));
           slider.oninput = () => { l.strength = +slider.value; valLabel.textContent = l.strength.toFixed(2); persistStack(); };
           controls = h('div', { class: 'lora-stack-controls' },
@@ -655,7 +772,7 @@ export async function render(root) {
       h('p', { class: 'muted' }, isVideo
         ? 'High shapes motion and composition; Low shapes texture and detail. Checkbox pauses both without losing their strengths.'
         : 'Checkbox toggles a LoRA without losing its strength; ✕ removes it.'),
-      isVideo ? wanStackNote : null,
+      ...(isVideo ? [wanStackNote] : []),
       stackList,
       h('h3', { class: 'section-gap' }, 'Library'), libList);
     drawModal();
@@ -785,6 +902,8 @@ export async function render(root) {
 
   function renderQueue(q) {
     clear(queueList);
+    const active = q.queued.length + (q.current ? 1 : 0);
+    queueCount.textContent = active ? `${active} active` : `${q.history.length} recent`;
     if (isVideoKind(modelKind(q.current?.model_id))) {
       setPreviewAspect(q.current.width, q.current.height);
     }
