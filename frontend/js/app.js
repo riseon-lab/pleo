@@ -129,22 +129,35 @@ function enterApp() {
   route();
 }
 
+function setNavigationOpen(expanded) {
+  appEl.classList.toggle('nav-open', expanded);
+  const toggle = document.getElementById('collapse-btn');
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.textContent = expanded ? 'Close' : 'Menu';
+}
+
 function buildSidebar() {
   const nav = clear(document.getElementById('side-nav'));
   for (const r of ROUTES) {
-    const item = h('button', { class: 'nav-item', dataset: { path: r.path }, onclick: () => { location.hash = `#/${r.path}`; } });
+    const item = h('button', { class: 'nav-item', dataset: { path: r.path }, onclick: () => { setNavigationOpen(false); location.hash = `#/${r.path}`; } });
     item.append(icon({ running: 'sparkles', models: 'box', assets: 'photo', loras: 'adjustments', data: 'database', training: 'school' }[r.icon]));
     item.append(h('span', { class: 'nav-label' }, r.label));
     nav.append(item);
   }
   const foot = clear(document.getElementById('side-foot'));
-  const sItem = h('button', { class: 'nav-item', 'aria-label': 'Settings', dataset: { path: 'settings' }, onclick: () => { location.hash = '#/settings'; } });
+  const sItem = h('button', { class: 'nav-item', 'aria-label': 'Settings', dataset: { path: 'settings' }, onclick: () => { setNavigationOpen(false); location.hash = '#/settings'; } });
   sItem.append(icon('settings'));
   sItem.append(h('span', { class: 'nav-label' }, 'Settings'));
   foot.append(sItem);
   document.getElementById('collapse-btn').onclick = () => {
-    const expanded = appEl.classList.toggle('nav-open');
-    document.getElementById('collapse-btn').setAttribute('aria-expanded', String(expanded));
+    setNavigationOpen(!appEl.classList.contains('nav-open'));
+  };
+  document.getElementById('sidebar').onkeydown = event => {
+    if (event.key === 'Escape' && appEl.classList.contains('nav-open')) {
+      event.preventDefault();
+      setNavigationOpen(false);
+      document.getElementById('collapse-btn').focus();
+    }
   };
 }
 
@@ -156,8 +169,7 @@ async function route() {
   if (currentPath === entry.path) return;
   if (currentCleanup) { try { currentCleanup(); } catch { } currentCleanup = null; }
   currentPath = entry.path;
-  appEl.classList.remove('nav-open');
-  document.getElementById('collapse-btn').setAttribute('aria-expanded', 'false');
+  setNavigationOpen(false);
   viewType(entry.path);
   saveUI({ route: entry.path });
   document.querySelectorAll('.nav-item').forEach(el =>

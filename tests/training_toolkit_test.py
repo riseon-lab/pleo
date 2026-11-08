@@ -39,4 +39,5 @@ assert calls[:2] == [
     ["git", "-C", str(Path(tmp)), "fetch", "--depth", "1", "origin", training.AI_TOOLKIT_REF],
     ["git", "-C", str(Path(tmp)), "checkout", "--detach", training.AI_TOOLKIT_REF],
 ]
+assert training.AI_TOOLKIT_REF == "8cf43dd2cc1fe828884001aceeda044649d9abd0", "preserve the FLA/Python compatibility pin"
 print("PASS  ai-toolkit installer checks out the compatible revision")

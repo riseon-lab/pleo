@@ -126,7 +126,14 @@ export async function render(root) {
     const f = refInput.files[0];
     if (f) await useSourceFile(f);
   } });
-  const refField = h('label', { class: 'field' }, h('span', {}, 'Reference image (required for edit models)'), refInput);
+  const refLabel = h('span', {}, 'Reference image (required for edit models)');
+  const refClear = h('button', { class: 'btn ghost small', type: 'button', hidden: true, onclick: () => {
+    if (refFile?.ownedURL) URL.revokeObjectURL(refFile.url);
+    refFile = null; refInput.value = ''; refClear.hidden = true;
+    renderVideoSource(); syncAspect();
+  } }, 'Clear reference');
+  const refField = h('div', { class: 'field', style: 'grid-column:1 / -1' },
+    h('label', { class: 'field' }, refLabel, refInput), refClear);
 
   const videoInput = h('input', { type: 'file', accept: '.png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp', hidden: true, onchange: async () => {
     const f = videoInput.files[0];
@@ -405,7 +412,9 @@ export async function render(root) {
     stepCfgFields.hidden = isLockedVideo;
     resolutionField.hidden = isVideo;
     dimensionFields.hidden = isVideo;
-    refField.style.display = model.kind === 'edit' ? '' : 'none';
+    refField.style.display = model.kind === 'edit' || model.supports_reference_image ? '' : 'none';
+    refLabel.textContent = model.supports_reference_image ? 'Reference image (optional)' : 'Reference image (required for edit models)';
+    refClear.hidden = !refFile || !model.supports_reference_image;
     drivingField.hidden = !isDriven;
     videoSecondsField.hidden = isDriven;
     videoFpsField.hidden = isDriven;
@@ -573,6 +582,7 @@ export async function render(root) {
       width: dimensions.width, height: dimensions.height,
       ownedURL: !existingURL,
     };
+    refClear.hidden = !model.supports_reference_image;
     renderVideoSource();
     syncAspect();
     if (save) toast(`${name} saved to Assets (encrypted)`, 'success');
@@ -844,7 +854,7 @@ export async function render(root) {
         seed: +seed.value,
         loras: enabledLoras.map(l => ({ file: l.file, strength: l.strength })),
       };
-      if (model.kind === 'edit' && refFile) body.ref_image_b64 = refFile.b64;
+      if ((model.kind === 'edit' || model.supports_reference_image) && refFile) body.ref_image_b64 = refFile.b64;
       if (isDriven) body.ref_video_b64 = drivingFile.b64;
       if (isVideo) {
         if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);

@@ -3,7 +3,10 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b0e13">
   <title>Character Studio</title>
+  <link rel="preload" href="assets/fonts/ObelMono-VF.woff2" as="font" type="font/woff2" crossorigin>
   <link rel="stylesheet" href="css/style.css">
   <link rel="stylesheet" href="css/studio.css">
 </head>
@@ -22,7 +25,7 @@
     <nav id="sidebar" class="sidebar">
       <div class="side-brand">
         <span class="brand-mark small">Character Studio</span>
-        <button id="collapse-btn" class="icon-btn side-collapse" aria-label="Toggle navigation" aria-expanded="false">Menu</button>
+        <button id="collapse-btn" class="icon-btn side-collapse" aria-label="Toggle navigation" aria-controls="side-nav" aria-expanded="false">Menu</button>
       </div>
       <div class="side-nav" id="side-nav"></div>
       <div class="side-foot" id="side-foot"></div>

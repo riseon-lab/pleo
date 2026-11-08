@@ -111,7 +111,7 @@ AI_TOOLKIT_DIR = os.environ.get("AI_TOOLKIT_DIR", "/workspace/ai-toolkit")
 # ai-toolkit arch names, verified against source: ZImageModel.arch = "zimage"
 # (extensions_built_in/diffusion_models/z_image/z_image.py) and the official
 # qwen example config uses arch "qwen_image".
-ARCH_BY_FAMILY = {"zimage": "zimage", "qwen-image": "qwen_image"}
+ARCH_BY_FAMILY = {"zimage": "zimage", "qwen-image": "qwen_image", "qwen-image-2.1": "qwen_image_2"}
 
 
 def build_toolkit_config(job: dict) -> Path:
@@ -144,8 +144,14 @@ def build_toolkit_config(job: dict) -> Path:
         "lr_scheduler": job.get("lr_scheduler", "constant"),
         "dtype": "bf16",
     }
-    model = {"name_or_path": base["repo_id"], "arch": arch}
-    if is_qwen:
+    model = {"name_or_path": base.get("training_repo_id", base["repo_id"]), "arch": arch}
+    if base["family"] == "qwen-image-2.1":
+        # The existing pinned toolkit already supports this architecture;
+        # use its Comfy weights and convrot quantization recipe, not Qwen 2512's.
+        train.update(cache_text_embeddings=True, timestep_type="shift")
+        model.update(quantize=profile != "high", quantize_te=profile != "high",
+                     qtype="convrot8", qtype_te="convrot8", low_vram=profile == "low")
+    elif is_qwen:
         # 20B transformer + VL text encoder. bf16 weights alone are ~40GB, so
         # weight quantization stays on below the 80GB+ profile. Text-embedding
         # caching is a pure win at any size (encoder runs once, then unloads).
@@ -180,7 +186,8 @@ def build_toolkit_config(job: dict) -> Path:
                            "width": 1024, "height": 1024,
                            "prompts": job.get("sample_prompts", []),
                            "neg": "", "seed": 42, "walk_seed": True,
-                           "guidance_scale": 3, "sample_steps": 25},
+                           "guidance_scale": 1 if base["family"] == "qwen-image-2.1" else 3,
+                           "sample_steps": 40 if base["family"] == "qwen-image-2.1" else 25},
             }],
         },
     }

@@ -12,7 +12,9 @@ generation settings and stack in the current browser. These are local presets,
 not trained characters; clearing browser storage removes them.
 
 Create, Models, Library, LoRA library, Data Studio, Training and Settings share
-the new theme. On phones, Menu opens navigation and the generation controls
+the dark charcoal theme and locally bundled Obel Mono typography
+([Typographic Systems](https://typographic.systems/obel-mono), SIL OFL 1.1).
+On phones, Menu opens full-width navigation and the generation controls
 remain pinned to the bottom. The opening portrait is labelled as an example;
 live generation replaces it with the actual output.
 
@@ -70,6 +72,21 @@ docker run --gpus all -p 3000:3000 -v /your/volume:/workspace \
 
 Model repo ids live in `models.json` — edit freely; no code changes needed.
 
+**Qwen Image 2.1** uses the official
+[Qwen/Qwen-Image-2.1](https://huggingface.co/Qwen/Qwen-Image-2.1) checkpoint,
+with its own Python 3.11+ environment. Defaults are 40 steps and CFG 1;
+model CPU offload reduces GPU memory use. A single optional reference image
+enables editing, including transparent PNG inputs and outputs. LoRA stacking
+requires adapters built for 2.1; older Qwen adapters are not interchangeable.
+The Training page supports new character/style LoRAs using the existing pinned
+ai-toolkit revision, which already contains the `qwen_image_2` architecture.
+Training uses its Comfy-Org weight source and convrot8 quantization for the
+24/48 GB profiles; 80 GB+ disables quantization. Existing datasets/captions can
+be reused, but 2512 LoRAs need retraining. The generator converts the trainer's
+fused gate/up adapter layout when loading those checkpoints. The compatibility
+pin and the older trainer environment are unchanged. This checkpoint uses the
+Qwen Research License.
+
 ## Data Studio & Training
 
 - **Data Studio**: datasets of images + caption sidecars (`img.png` +
@@ -77,7 +94,7 @@ Model repo ids live in `models.json` — edit freely; no code changes needed.
   repo. Auto-caption with the Qwen2.5-VL captioner (own venv/runner; mock
   captions locally). Trigger words are saved per dataset and auto-prepended.
   ⚠ Dataset images are plaintext on the volume — training needs raw pixels.
-- **Training**: LoRA jobs on Z Image Base / Qwen Image 2512 via
+- **Training**: LoRA jobs on Z Image Base / Qwen Image 2512 / Qwen Image 2.1 via
   [ostris/ai-toolkit](https://github.com/ostris/ai-toolkit) (mock-simulated
   locally). Checkpoints every 250, 500, or 1000 steps plus manual "save now";
   sample images per checkpoint from separate prompt boxes; ETA and

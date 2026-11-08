@@ -54,6 +54,26 @@
       "dim_multiple": 16
     },
     {
+      "id": "qwen-image-2.1",
+      "name": "Qwen Image 2.1",
+      "family": "qwen-image-2.1",
+      "kind": "txt2img",
+      "repo_id": "Qwen/Qwen-Image-2.1",
+      "training_repo_id": "Comfy-Org/Qwen-Image-2.1",
+      "reqs": "qwen-image-2.1.txt",
+      "supports_reference_image": true,
+      "defaults": {
+        "steps": 40,
+        "cfg": 1.0,
+        "width": 1024,
+        "height": 1024,
+        "seed": -1
+      },
+      "notes": "Unified image generation and editing with an optional reference image and native transparency. 40 steps, CFG 1 by default; CPU offload reduces VRAM use. Use LoRAs made for Qwen-Image-2.1, not earlier Qwen models. Qwen Research License.",
+      "trainable": true,
+      "dim_multiple": 16
+    },
+    {
       "id": "qwen-image-edit-2511",
       "name": "Qwen Image Edit 2511",
       "family": "qwen-image-edit",

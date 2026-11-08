@@ -317,7 +317,12 @@ def real_load():
         dtype = torch.bfloat16 if torch.cuda.is_available() else torch.float32
         pipe = DiffusionPipeline.from_pretrained(model["repo_id"], torch_dtype=dtype)
         if torch.cuda.is_available():
-            pipe = pipe.to("cuda")
+            if model["family"] == "qwen-image-2.1":
+                # Encode, denoise and decode sequentially instead of holding
+                # the Qwen3-VL encoder and the 7B transformer on CUDA together.
+                pipe.enable_model_cpu_offload()
+            else:
+                pipe = pipe.to("cuda")
     STATE["pipe"] = pipe
     STATE["loaded"] = True
 
@@ -629,6 +634,26 @@ def _vace_generate(params: dict, emit, seed: int, generator) -> dict:
         torch.cuda.empty_cache()
 
 
+def _qwen21_lora_weights(pipe, path: str) -> dict:
+    # Let Diffusers normalize prefixes and alpha/rank scaling first. The pinned
+    # toolkit fuses [gate; up]; Diffusers represents those as two linear layers.
+    weights = pipe.lora_state_dict(path)
+    suffix = ".img_mlp.gate_up.lora_A.weight"
+    for key in list(weights):
+        if not key.endswith(suffix):
+            continue
+        prefix = key[:-len("gate_up.lora_A.weight")]
+        down = weights.pop(key)
+        up = weights.pop(prefix + "gate_up.lora_B.weight")
+        if down.ndim != 2 or up.ndim != 2 or up.shape[0] % 2 or up.shape[1] != down.shape[0]:
+            raise ValueError(f"Invalid fused Qwen Image 2.1 LoRA weights: {key}")
+        midpoint = up.shape[0] // 2
+        for name, part in (("gate_layer", up[:midpoint]), ("proj", up[midpoint:])):
+            weights[prefix + name + ".lora_A.weight"] = down
+            weights[prefix + name + ".lora_B.weight"] = part
+    return weights
+
+
 def real_generate(params: dict, emit) -> dict:
     import torch
 
@@ -655,7 +680,8 @@ def real_generate(params: dict, emit) -> dict:
         names, weights = [], []
         for i, lora in enumerate(params["loras"]):
             name = f"lora{i}"
-            pipe.load_lora_weights(lora["path"], adapter_name=name)
+            source = _qwen21_lora_weights(pipe, lora["path"]) if family == "qwen-image-2.1" else lora["path"]
+            pipe.load_lora_weights(source, adapter_name=name)
             names.append(name)
             weights.append(lora["strength"])
         pipe.set_adapters(names, adapter_weights=weights)
@@ -668,13 +694,14 @@ def real_generate(params: dict, emit) -> dict:
     )
     if params.get("negative_prompt"):
         kwargs["negative_prompt"] = params["negative_prompt"]
-    if family in ("qwen-image", "qwen-image-edit"):
+    if family in ("qwen-image", "qwen-image-edit", "qwen-image-2.1"):
         kwargs["true_cfg_scale"] = params["cfg"]
     else:
         kwargs["guidance_scale"] = params["cfg"]
     if params.get("ref_image_b64"):
         from PIL import Image
-        kwargs["image"] = Image.open(io.BytesIO(base64.b64decode(params["ref_image_b64"]))).convert("RGB")
+        mode = "RGBA" if family == "qwen-image-2.1" else "RGB"
+        kwargs["image"] = Image.open(io.BytesIO(base64.b64decode(params["ref_image_b64"]))).convert(mode)
 
     image = pipe(**kwargs).images[0]
     buf = io.BytesIO()

@@ -90,7 +90,12 @@ check("cross-origin POST still rejected behind proxy", r.status_code == 403, r.t
 # --- models ---
 r = c.get("/api/models", headers=H)
 models = r.json()
-check("models list (7, mock mode)", len(models["models"]) == 7 and models["mock"] is True, r.text[:200])
+check("models list (8, mock mode)", len(models["models"]) == 8 and models["mock"] is True, r.text[:200])
+qwen21 = next((m for m in models["models"] if m["id"] == "qwen-image-2.1"), None)
+check("Qwen Image 2.1 metadata and sampling defaults", qwen21 and
+      qwen21["repo_id"] == "Qwen/Qwen-Image-2.1" and qwen21["kind"] == "txt2img" and
+      qwen21["supports_reference_image"] is True and qwen21["defaults"]["steps"] == 40 and
+      qwen21["defaults"]["cfg"] == 1 and qwen21["trainable"] is True, str(qwen21))
 wan_model = next((m for m in models["models"] if m["id"] == "wan-2.2-i2v-a14b-lightning"), None)
 check("Wan distilled quality model metadata", wan_model and wan_model["kind"] == "img2video" and
       "2026-04-12" in wan_model["distilled_experts"]["name"] and
@@ -227,6 +232,28 @@ check("result meta header", meta_hdr["seed"] == 42 and meta_hdr["prompt"] == gen
 png = r.content
 w = int.from_bytes(png[16:20], "big"); hgt = int.from_bytes(png[20:24], "big")
 check("result matches requested resolution", (w, hgt) == (256, 320), f"{w}x{hgt}")
+
+# --- Qwen Image 2.1: generation and an optional reference use the same model ---
+for reference in (None, base64.b64encode(png).decode()):
+    qwen_request = {**gen, "model_id": "qwen-image-2.1", "steps": 1, "cfg": 1,
+                    "ref_image_b64": reference}
+    r = c.post("/api/generate", headers=H, json=qwen_request)
+    check(f"submit Qwen 2.1 {'edit' if reference else 'text-to-image'}", r.status_code == 200, r.text)
+    qwen_job_id = r.json()["job"]["id"]
+    deadline = time.time() + 30
+    qwen_done = None
+    while time.time() < deadline:
+        qwen_done = next((j for j in c.get("/api/queue", headers=H).json()["history"]
+                          if j["id"] == qwen_job_id), None)
+        if qwen_done:
+            break
+        time.sleep(0.5)
+    check("Qwen 2.1 job completed", qwen_done and qwen_done["status"] == "done", str(qwen_done))
+    if qwen_done and qwen_done.get("result_id"):
+        qwen_result_id = qwen_done["result_id"]
+        r = c.get(f"/api/results/{qwen_result_id}", headers=H)
+        check("Qwen 2.1 result is PNG", r.status_code == 200 and r.content[:4] == b"\x89PNG")
+        c.delete(f"/api/results/{qwen_result_id}", headers=H)
 
 # --- Wan 2.2 I2V distilled quality profile (mock MP4 + dual-stage LoRAs) ---
 wan_lora_a = loras_dir / "wan-a.safetensors"
@@ -639,12 +666,14 @@ check("training cancelled mid-run", j1["status"] == "cancelled", str(j1["status"
 check("manual checkpoint was saved before cancel", len(j1["checkpoints"]) >= 1, str(j1["checkpoints"]))
 check("sec_per_step measured", j1["sec_per_step"] is not None and j1["sec_per_step"] > 0, str(j1["sec_per_step"]))
 
-r = c.post("/api/training/jobs", headers=H, json={**base_job, "name": "tiny run", "steps": 300,
+r = c.post("/api/training/jobs", headers=H, json={**base_job, "name": "tiny Qwen 2.1 run", "steps": 300,
+                                                  "base_model": "qwen-image-2.1",
                                                   "checkpoint_steps": [100, 200],
                                                   "optimizer": "prodigy", "lr_scheduler": "cosine",
                                                   "alpha": 32, "vram_profile": "high",
                                                   "gradient_checkpointing": False})
 check("short training job starts", r.status_code == 200, r.text[:200])
+check("Qwen 2.1 training base recorded", r.json()["base_model"] == "qwen-image-2.1", r.text[:200])
 tj2 = r.json()["id"]
 check("optimizer/scheduler/alpha recorded", r.json()["optimizer"] == "prodigy"
       and r.json()["lr_scheduler"] == "cosine" and r.json()["alpha"] == 32, r.text[:300])

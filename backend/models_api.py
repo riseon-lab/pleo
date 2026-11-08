@@ -80,7 +80,7 @@ def list_models():
         with _dl_lock:
             dl = _downloads.get(m["id"], {})
         out.append({
-            **{k: m.get(k) for k in ("id", "name", "family", "kind", "repo_id", "defaults", "notes", "trainable", "dim_multiple", "video", "distilled_experts", "lora_defaults", "output_mime")},
+            **{k: m.get(k) for k in ("id", "name", "family", "kind", "repo_id", "defaults", "notes", "trainable", "dim_multiple", "video", "distilled_experts", "lora_defaults", "output_mime", "supports_reference_image")},
             "weights": _weights_status(m),
             "download": {k: dl.get(k) for k in ("progress", "detail")} if dl else None,
             "env": env_status(m["id"])["status"] if not config.MOCK else "mock",

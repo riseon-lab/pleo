@@ -135,7 +135,7 @@ check('tile menu closes on outside click', await page.locator('.tile-pop:not([hi
 await navigate('models');
 await page.waitForSelector('.model-card');
 const cards = await page.locator('.model-card').count();
-check('7 model cards', cards === 7, String(cards));
+check('8 model cards', cards === 8, String(cards));
 const chips = await page.locator('.model-card .badge').allTextContents();
 check('mock mode badges shown', chips.some(c => c.includes('mock')), chips.join(','));
 await page.screenshot({ path: SHOTS + '06-models.png' });
@@ -297,6 +297,29 @@ await navigate('running');
 await page.waitForTimeout(400);
 const sideBox = await page.locator('#sidebar').boundingBox();
 check('mobile: navigation stays at the top', sideBox && sideBox.y === 0, JSON.stringify(sideBox));
+for (const width of [320, 390, 768]) {
+  await page.setViewportSize({ width, height: 844 });
+  await page.click('#collapse-btn');
+  const menuFits = await page.locator('#side-nav').evaluate(nav => {
+    const bounds = nav.getBoundingClientRect();
+    return bounds.left >= 0 && Math.abs(bounds.width - innerWidth) <= 1 &&
+      [...nav.querySelectorAll('.nav-item')].every(item => {
+        const box = item.getBoundingClientRect();
+        return box.left >= 0 && box.right <= innerWidth && box.height >= 48 &&
+          item.scrollWidth <= item.clientWidth;
+      });
+  });
+  check(`mobile menu: full-width, readable links at ${width}px`, menuFits);
+  await page.click('.nav-item[data-path="running"]');
+  check(`mobile menu: tapping the current page closes at ${width}px`,
+    await page.getAttribute('#collapse-btn', 'aria-expanded') === 'false');
+}
+await page.setViewportSize({ width: 390, height: 844 });
+await page.click('#collapse-btn');
+await page.keyboard.press('Escape');
+check('mobile menu: Escape closes and returns focus to Menu',
+  await page.getAttribute('#collapse-btn', 'aria-expanded') === 'false' &&
+  await page.locator('#collapse-btn').evaluate(button => button === document.activeElement));
 const maxRight = () => Math.max(...[...document.querySelectorAll('*')]
   .filter(el => el.getBoundingClientRect().width > 50)
   .filter(el => !el.closest('.builder-tabs, .choice-grid, .builder-sections'))

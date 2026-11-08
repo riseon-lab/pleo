@@ -1,0 +1,8 @@
+# Qwen-Image-2.1 needs QwenImage21Pipeline and Qwen3-VL. Keep its runtime
+# separate from older Qwen environments. Python 3.11+; torch is shared.
+diffusers==0.42.1
+transformers==5.22.2
+peft==0.21.2
+accelerate>=1.2.0
+safetensors>=0.4.5
+pillow
