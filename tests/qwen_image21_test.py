@@ -71,7 +71,8 @@ previous_state = dict(runner.STATE)
 try:
     runner.CONFIG = {"model": model, "hf_home": "/tmp/pleo-qwen21-unit-cache"}
     with patch.dict(sys.modules, {"torch": torch, "diffusers": SimpleNamespace(
-            DiffusionPipeline=SimpleNamespace(from_pretrained=from_pretrained))}), patch.dict("os.environ"):
+            DiffusionPipeline=SimpleNamespace(from_pretrained=from_pretrained))}), patch.dict("os.environ"), \
+            patch.object(runner, "_qwen_preview_module", return_value=SimpleNamespace(load_decoder=lambda: None)):
         runner.real_load()
         assert pipe.offloaded and pipe.device is None, "2.1 must not move every model to CUDA together"
         assert loads == [("Qwen/Qwen-Image-2.1", {"torch_dtype": "bf16"})]

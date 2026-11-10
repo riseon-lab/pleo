@@ -90,7 +90,7 @@ export function lightbox(src, { mime = 'image/png', metaEl = null, onDelete = nu
     overlay.remove();
     document.removeEventListener('keydown', onKey);
   }
-  return { close };
+  return { close, media, frame };
 }
 
 export function spinner(label = 'Loading…') {

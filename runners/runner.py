@@ -33,6 +33,7 @@ VIDEO_KINDS = {"img2video", "motion2video", "video2video"}
 STATE = {
     "loaded": False,
     "pipe": None,
+    "preview_decoder": None,
     "lock": threading.Lock(),        # single-flight: one generation at a time
     "cancel": threading.Event(),
 }
@@ -324,7 +325,18 @@ def real_load():
             else:
                 pipe = pipe.to("cuda")
     STATE["pipe"] = pipe
+    STATE["preview_decoder"] = None
+    if model["family"] == "qwen-image-2.1":
+        try:
+            STATE["preview_decoder"] = _qwen_preview_module().load_decoder()
+        except Exception as error:
+            print(f"Qwen live preview unavailable; generation can continue: {error}", file=sys.stderr)
     STATE["loaded"] = True
+
+
+def _qwen_preview_module():
+    import importlib
+    return importlib.import_module("runners.qwen_preview" if __package__ else "qwen_preview")
 
 
 def _step_callback(params: dict, emit, total: int):
@@ -332,10 +344,21 @@ def _step_callback(params: dict, emit, total: int):
         if STATE["cancel"].is_set():
             raise Cancelled()
         preview_b64 = None
+        preview_kind = None
         latents = callback_kwargs.get("latents")
         try:
             lat = None
-            if latents is not None and latents.dim() == 5:
+            is_qwen21 = CONFIG["model"]["family"] == "qwen-image-2.1"
+            if is_qwen21:
+                preview_kind = "decoded" if STATE["preview_decoder"] is not None else "unavailable"
+                # Preview at the first step, every fourth step, and the last;
+                # never wake the full VAE or its GPU offload hooks mid-sampling.
+                if latents is not None and STATE["preview_decoder"] is not None and (step == 0 or (step + 1) % 4 == 0 or step + 1 == total):
+                    image = _qwen_preview_module().decode_preview(STATE["preview_decoder"], pipeline, latents, params)
+                    buf = io.BytesIO()
+                    image.save(buf, format="PNG")
+                    preview_b64 = base64.b64encode(buf.getvalue()).decode()
+            elif latents is not None and latents.dim() == 5:
                 # Video latents: preview the first temporal slice without a
                 # costly VAE decode.
                 lat = latents[0, :3, 0].float()
@@ -354,15 +377,18 @@ def _step_callback(params: dict, emit, total: int):
                 Image.fromarray(img).resize((params["width"] // 4, params["height"] // 4),
                                             Image.Resampling.NEAREST).save(buf, format="PNG")
                 preview_b64 = base64.b64encode(buf.getvalue()).decode()
-        except Exception:
-            pass
+        except Exception as error:
+            if CONFIG["model"]["family"] == "qwen-image-2.1":
+                STATE["preview_decoder"] = None
+                preview_kind = "unavailable"
+                print(f"Qwen live preview unavailable; generation can continue: {error}", file=sys.stderr)
         stage = None
         if CONFIG["model"]["kind"] in VIDEO_KINDS:
             stage = "Planning motion · high noise" if step < 2 else "Refining detail · low noise"
             if step + 1 == total:
                 stage = "Decoding video…"
         emit({"type": "step", "step": step + 1, "total": total,
-              "preview_b64": preview_b64, "stage": stage})
+              "preview_b64": preview_b64, "preview_kind": preview_kind, "stage": stage})
         return callback_kwargs
     return on_step
 

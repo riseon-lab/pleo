@@ -57,6 +57,10 @@ export async function render(root) {
   let videoSeconds = params.video_seconds || Math.round(((params.num_frames || 81) - 1) / videoFps) || 5;
   let resultObjectURL = null;
   let liveJobId = null;
+  let displayedJobId = null;
+  let hasLivePreview = false;
+  let stopRequested = false;
+  let liveLightbox = null;
   let disposed = false;
 
   // ---------- controls ----------
@@ -243,12 +247,19 @@ export async function render(root) {
   const emptyNote = h('span', { class: 'studio-example-label' }, 'Studio example · create your own below');
   const previewEmpty = h('div', { class: 'preview-empty studio-example' },
     h('img', { src: '/assets/studio-example.jpg', alt: 'Example editorial portrait in a black top and tailored gray trousers' }), emptyNote);
-  const previewBox = h('div', { class: 'preview-box' }, previewImg, previewVideo, previewEmpty);
+  const generationMotion = h('div', { class: 'generation-motion', 'aria-hidden': true, hidden: true },
+    h('i', {}), h('i', {}), h('i', {}));
+  const previewLabel = h('span', { class: 'generation-label', hidden: true }, 'Preparing your image');
+  const previewBox = h('div', { class: 'preview-box', 'aria-label': 'Generation viewer', 'aria-busy': false },
+    generationMotion, previewImg, previewVideo, previewEmpty, previewLabel);
   const progressBar = h('div', {});
-  const progressWrap = h('div', { class: 'progress', style: 'visibility:hidden' }, progressBar);
+  const progressWrap = h('div', { class: 'progress', role: 'progressbar', 'aria-label': 'Generation progress',
+    'aria-valuemin': 0, 'aria-valuemax': 100, style: 'visibility:hidden' }, progressBar);
+  const statusText = h('span', { class: 'muted', id: 'gen-status', role: 'status' }, 'Idle');
+  const stopButton = h('button', { class: 'btn ghost small', hidden: true, id: 'cancel-btn', onclick: cancelCurrent }, 'Stop generation');
+  const peekButton = h('button', { class: 'text-btn', hidden: true, onclick: openLivePreview }, icon('zoom-in'), 'Enlarge preview');
   const statusLine = h('div', { class: 'row between' },
-    h('span', { class: 'muted', id: 'gen-status' }, 'Idle'),
-    h('button', { class: 'btn ghost small', hidden: true, id: 'cancel-btn', onclick: cancelCurrent }, 'Cancel'));
+    statusText, h('div', { class: 'generation-actions' }, peekButton, stopButton));
   const viewer = h('div', { class: 'viewer-card studio-viewer' },
     h('div', { class: 'preview-shell' }, previewBox),
     progressWrap, statusLine);
@@ -281,7 +292,7 @@ export async function render(root) {
     h('div', { class: 'section-eyebrow' }, 'YOUR DIRECTION'), directionList, modeSwitch,
     h('button', { class: 'studio-queue-link', onclick: () => { queueCard.open = true; queueCard.scrollIntoView({ behavior: 'smooth', block: 'start' }); } },
       icon('stack-2'), 'View queue & results'),
-    h('p', { class: 'muted studio-note' }, 'Fine-tune your selections, then generate. Your preview updates when the model renders.'));
+    h('p', { class: 'muted studio-note' }, 'Watch your direction take shape. Early previews are approximate; stop the run if it heads the wrong way.'));
 
   const badgeHost = h('span', {}, runnerBadge(modelsRes.runner, models));
   root.append(h('div', { class: 'view-head studio-head' },
@@ -299,6 +310,11 @@ export async function render(root) {
 
   syncInputs();
   renderSavedLooks();
+  if (queueRes.current) {
+    beginJob(queueRes.current);
+    if (queueRes.current.progress) showStep({ job_id: queueRes.current.id, ...queueRes.current.progress });
+    else setStatus(queueRes.current.status === 'starting' ? 'Preparing model…' : 'Generating…', { cancellable: true, progress: 0 });
+  }
   renderQueue(queueRes);
 
   // ---------- behavior ----------
@@ -446,6 +462,7 @@ export async function render(root) {
   }
 
   function syncAspect() {
+    if (liveJobId) return;
     if (isVideoKind(model.kind)) {
       const dimensions = videoSourceDimensions();
       previewBox.style.aspectRatio = videoAspect === '9:16' ? '9 / 16' : dimensions
@@ -856,7 +873,7 @@ export async function render(root) {
       };
       if ((model.kind === 'edit' || model.supports_reference_image) && refFile) body.ref_image_b64 = refFile.b64;
       if (isDriven) body.ref_video_b64 = drivingFile.b64;
-      if (isVideo) {
+      if (isVideo && !liveJobId) {
         if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
         resultObjectURL = null;
         const guide = isDriven ? drivingFile : refFile;
@@ -864,6 +881,9 @@ export async function render(root) {
       }
       const res = await api('/api/generate', { method: 'POST', body });
       toast(res.position > 1 ? `Queued (position ${res.position})` : `${isVideo ? 'Video generation' : 'Generation'} started`);
+      if (res.position <= 1) viewer.scrollIntoView({
+        behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'center',
+      });
       refreshQueue();
     } catch (e) {
       toast(e.message, 'error');
@@ -873,20 +893,106 @@ export async function render(root) {
   }
 
   async function cancelCurrent() {
-    if (liveJobId) {
-      try { await api(`/api/jobs/${liveJobId}/cancel`, { method: 'POST' }); } catch (e) { toast(e.message, 'error'); }
+    if (liveJobId && !stopRequested) {
+      const id = liveJobId;
+      stopRequested = true;
+      setStatus(statusText.textContent, { cancellable: true });
+      try { await api(`/api/jobs/${id}/cancel`, { method: 'POST' }); } catch (e) {
+        if (liveJobId === id) {
+          stopRequested = false;
+          setStatus('Generating…', { cancellable: true });
+        }
+        toast(e.message, 'error');
+      }
     }
   }
 
-  function setStatus(text, { cancellable = false, progress = null } = {}) {
-    document.getElementById('gen-status').textContent = text;
-    document.getElementById('cancel-btn').hidden = !cancellable;
+  function beginJob(job) {
+    if (displayedJobId !== job.id) {
+      displayedJobId = job.id;
+      hasLivePreview = false;
+      stopRequested = false;
+      previewImg.hidden = previewVideo.hidden = previewEmpty.hidden = true;
+      previewVideo.pause();
+      previewImg.onclick = null;
+      previewImg.style.cursor = '';
+      previewImg.style.objectFit = 'contain';
+      previewBox.classList.remove('has-live-preview');
+      peekButton.hidden = true;
+      previewLabel.textContent = 'Waiting for first preview';
+      if (liveLightbox) liveLightbox.media.hidden = true;
+    }
+    liveJobId = job.id;
+    setPreviewAspect(job.width, job.height);
+  }
+
+  function setStatus(text, { cancellable = false, progress = null, busy = cancellable } = {}) {
+    statusText.textContent = stopRequested && cancellable ? 'Stopping after this step…' : text;
+    stopButton.hidden = !cancellable;
+    stopButton.disabled = stopRequested;
+    stopButton.textContent = stopRequested ? 'Stopping…' : 'Stop generation';
+    previewBox.classList.toggle('is-generating', busy);
+    previewBox.setAttribute('aria-busy', String(busy));
+    generationMotion.hidden = !busy;
+    if (busy) previewLabel.hidden = false;
+    else if (!hasLivePreview || text === 'Done') previewLabel.hidden = true;
     progressWrap.style.visibility = progress === null ? 'hidden' : 'visible';
-    if (progress !== null) progressBar.style.width = `${progress}%`;
+    if (progress !== null) {
+      progressBar.style.width = `${progress}%`;
+      progressWrap.setAttribute('aria-valuenow', String(progress));
+    }
+    if (liveLightbox?.media.isConnected) {
+      liveLightbox.frame.classList.toggle('is-generating', busy);
+      liveLightbox.status.textContent = statusText.textContent;
+      liveLightbox.stop.hidden = !cancellable;
+      liveLightbox.stop.disabled = stopRequested;
+      liveLightbox.stop.textContent = stopButton.textContent;
+    }
+  }
+
+  function openLivePreview() {
+    if (!hasLivePreview) return;
+    liveLightbox?.close();
+    const status = h('span', { role: 'status' }, statusText.textContent);
+    const stop = h('button', { class: 'btn ghost small', onclick: cancelCurrent,
+      disabled: stopRequested, hidden: !liveJobId }, stopButton.textContent);
+    liveLightbox = { ...lightbox(previewImg.src, { metaEl: h('div', { class: 'live-preview-controls' }, status, stop) }), status, stop };
+    liveLightbox.frame.classList.add('generation-peek');
+    liveLightbox.media.style.setProperty('--preview-ratio', previewImg.naturalWidth / previewImg.naturalHeight || 1);
+    liveLightbox.frame.classList.toggle('is-generating', previewBox.classList.contains('is-generating'));
+    liveLightbox.media.alt = 'Live generation preview';
+  }
+
+  function showStep(ev) {
+    if (liveJobId && ev.job_id !== liveJobId) return;
+    if (!liveJobId) beginJob({ id: ev.job_id, width: ev.width, height: ev.height });
+    if (ev.preview_b64) {
+      showMedia(`data:image/png;base64,${ev.preview_b64}`);
+      hasLivePreview = true;
+      previewBox.classList.add('has-live-preview');
+      previewImg.alt = 'Live generation preview';
+      previewImg.onclick = openLivePreview;
+      previewImg.style.cursor = 'zoom-in';
+      peekButton.hidden = false;
+    }
+    const pct = ev.total ? Math.round(ev.step / ev.total * 100) : 0;
+    const rawStage = ev.stage || ev.phase;
+    const stage = {
+      prepare: 'Preparing image and prompt', high_noise: 'High-noise expert · motion and composition',
+      switch: 'Switching experts', low_noise: 'Low-noise expert · detail and refinement',
+      decode: 'Decoding video', encode: 'Encoding MP4',
+    }[rawStage] || rawStage;
+    previewLabel.textContent = ev.preview_kind === 'unavailable' ? 'Preview unavailable · generation continues'
+      : hasLivePreview ? 'Live preview · early details may change' : 'Waiting for first preview';
+    setStatus(ev.preview_kind === 'unavailable' ? `Step ${ev.step} / ${ev.total} · preview unavailable`
+      : stage || `Step ${ev.step} / ${ev.total}`, { cancellable: true, progress: pct });
   }
 
   function setPreviewAspect(mediaWidth, mediaHeight) {
     if (mediaWidth > 0 && mediaHeight > 0) previewBox.style.aspectRatio = `${mediaWidth} / ${mediaHeight}`;
+    if (mediaWidth > 0 && mediaHeight > 0 && liveLightbox?.media.isConnected) {
+      liveLightbox.media.style.setProperty('--preview-ratio', mediaWidth / mediaHeight);
+    }
   }
 
   function showMedia(url, mime = 'image/png', mediaWidth = 0, mediaHeight = 0) {
@@ -897,6 +1003,8 @@ export async function render(root) {
     previewImg.onclick = null;
     previewImg.style.cursor = '';
     if (isVideo) {
+      liveLightbox?.close();
+      liveLightbox = null;
       previewVideo.src = url;
       previewVideo.load();
     } else {
@@ -904,6 +1012,7 @@ export async function render(root) {
       previewVideo.removeAttribute('src');
       previewVideo.load();
       previewImg.src = url;
+      if (liveLightbox?.media.isConnected) { liveLightbox.media.src = url; liveLightbox.media.hidden = false; }
     }
     previewEmpty.hidden = true;
   }
@@ -970,6 +1079,7 @@ export async function render(root) {
     // collect the same (already-consumed) outbox result twice.
     if (collectingResults.has(job.result_id)) return;
     collectingResults.add(job.result_id);
+    let shownResult = false;
     try {
       const resp = await apiBlob(`/api/results/${job.result_id}`);
       const metaB64 = resp.headers.get('x-pleo-meta-plain');
@@ -977,11 +1087,20 @@ export async function render(root) {
       const contentType = (resp.headers.get('content-type') || '').split(';')[0];
       const mime = contentType && contentType !== 'application/octet-stream' ? contentType : jobMime(job);
       const bytes = await resp.arrayBuffer();
-      if (!disposed) {
+      if (!disposed && (!displayedJobId || displayedJobId === job.id)) {
+        displayedJobId = job.id;
         if (resultObjectURL) URL.revokeObjectURL(resultObjectURL);
         const url = URL.createObjectURL(new Blob([bytes], { type: mime }));
         resultObjectURL = url;
         showMedia(url, mime, meta.width || job.width, meta.height || job.height);
+        previewImg.alt = 'Generated image';
+        if (liveLightbox?.media.isConnected) liveLightbox.media.alt = 'Generated image';
+        hasLivePreview = false;
+        peekButton.hidden = true;
+        previewLabel.hidden = true;
+        previewBox.classList.remove('has-live-preview');
+        setStatus('Done');
+        shownResult = true;
         if (mime.startsWith('video/')) {
           previewVideo.onclick = null;
           previewImg.onclick = null;
@@ -1003,7 +1122,12 @@ export async function render(root) {
         refreshQueue();
       }
     } catch (e) {
-      if (!disposed) toast(`Result save failed: ${e.message}`, 'error');
+      if (!disposed) {
+        if (displayedJobId === job.id && !liveJobId) {
+          setStatus(shownResult ? 'Image ready · save failed' : 'Result could not be loaded');
+        }
+        toast(`Result save failed: ${e.message}`, 'error');
+      }
     } finally {
       collectingResults.delete(job.result_id);
     }
@@ -1025,27 +1149,24 @@ export async function render(root) {
       return;
     }
     if (ev.type === 'step') {
-      liveJobId = ev.job_id;
-      if (ev.preview_b64) showMedia(`data:image/png;base64,${ev.preview_b64}`);
-      const pct = ev.total ? Math.round(ev.step / ev.total * 100) : 0;
-      const rawStage = ev.stage || ev.phase;
-      const stage = {
-        prepare: 'Preparing image and prompt', high_noise: 'High-noise expert · motion and composition',
-        switch: 'Switching experts', low_noise: 'Low-noise expert · detail and refinement',
-        decode: 'Decoding video', encode: 'Encoding MP4',
-      }[rawStage] || rawStage;
-      setStatus(stage || `Step ${ev.step} / ${ev.total}`, { cancellable: true, progress: pct });
+      showStep(ev);
     } else if (ev.type === 'job') {
       const j = ev.job;
       if (isVideoKind(modelKind(j.model_id)) && j.status !== 'queued' && j.width > 0 && j.height > 0) {
         setPreviewAspect(j.width, j.height);
       }
       if (j.status === 'queued') refreshQueue();
-      if (j.status === 'starting') { liveJobId = j.id; setStatus(`Starting ${modelName(j.model_id)}…`, { cancellable: true, progress: 0 }); refreshQueue(); }
-      if (j.status === 'running') { liveJobId = j.id; setStatus('Generating…', { cancellable: true, progress: 0 }); refreshQueue(); }
+      if (j.status === 'starting') { beginJob(j); setStatus(`Starting ${modelName(j.model_id)}…`, { cancellable: true, progress: 0 }); refreshQueue(); }
+      if (j.status === 'running') { beginJob(j); setStatus('Generating…', { cancellable: true, progress: 0 }); refreshQueue(); }
       if (['done', 'error', 'cancelled', 'blocked'].includes(j.status)) {
+        if (displayedJobId && displayedJobId !== j.id) { refreshQueue(); return; }
         liveJobId = null;
-        setStatus(j.status === 'done' ? 'Done' : `${j.status}${j.error ? `: ${j.error}` : ''}`);
+        stopRequested = false;
+        previewLabel.textContent = j.status === 'cancelled' ? 'Stopped · preview only, not saved' : 'Preview only';
+        setStatus(j.status === 'done' && j.result_id && !j.asset_id ? 'Finishing image…'
+          : j.status === 'cancelled' ? 'Stopped · nothing saved'
+          : j.status === 'done' ? 'Done' : `${j.status}${j.error ? `: ${j.error}` : ''}`,
+        { busy: j.status === 'done' && Boolean(j.result_id) && !j.asset_id });
         if (j.status === 'done' && j.result_id && !j.asset_id) collectResult(j);
         if (j.status === 'blocked') toast(j.error || 'Blocked by moderation', 'error');
         if (j.status === 'error') toast(j.error || 'Generation failed', 'error');
@@ -1056,6 +1177,7 @@ export async function render(root) {
   return () => {
     disposed = true;
     off();
+    liveLightbox?.close();
     previewVideo.pause();
     previewVideo.removeAttribute('src');
     previewVideo.load();

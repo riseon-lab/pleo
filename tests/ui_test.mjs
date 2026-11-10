@@ -88,11 +88,15 @@ check('preview box is portrait (aspect matches 832x1216)', box && box.height > b
 await page.click('button:text("Generate")');
 await page.waitForSelector('#cancel-btn:not([hidden])', { timeout: 15000 });
 check('cancel button appears while running', true);
+check('generation viewer shows active motion state',
+  await page.locator('.preview-box').getAttribute('aria-busy') === 'true');
 await page.waitForSelector('.preview-box img:not([hidden])', { timeout: 20000 });
 await page.screenshot({ path: SHOTS + '02-generating.png' });
 await page.waitForSelector('.toast-success:has-text("Saved to assets")', { timeout: 60000 });
 const toastText = await page.locator('.toast-success:has-text("Saved to assets")').first().textContent();
 check('generated image auto-saved encrypted', toastText.includes('Saved to assets'), toastText);
+check('generation motion ends with the final image',
+  await page.locator('.preview-box').getAttribute('aria-busy') === 'false');
 await page.waitForTimeout(500);
 await page.screenshot({ path: SHOTS + '03-done.png' });
 const queueBadges = await page.locator('.queue-item .badge').allTextContents();
@@ -108,6 +112,28 @@ const lbImg = await page.locator('.lightbox-frame img').boundingBox();
 check('lightbox close button outside image corner', closeBtn && lbImg && closeBtn.y + closeBtn.height <= lbImg.y + 2, JSON.stringify({ closeBtn, lbImg }));
 await page.screenshot({ path: SHOTS + '04-lightbox.png' });
 await page.keyboard.press('Escape');
+
+// Live enlarged previews keep updating and can stop the current Qwen job.
+await page.getByLabel('Model', { exact: true }).selectOption('qwen-image-2.1');
+await page.fill('.grid2 label:has(span:text("Steps")) input', '30');
+await page.getByLabel('Output format', { exact: true }).selectOption('Square 512 × 512');
+await page.getByRole('button', { name: 'Generate image', exact: true }).click();
+await page.getByRole('button', { name: 'Enlarge preview', exact: true }).waitFor();
+await page.getByRole('button', { name: 'Enlarge preview', exact: true }).click();
+const firstLiveSource = await page.locator('.generation-peek img').getAttribute('src');
+await page.waitForFunction(src => document.querySelector('.generation-peek img')?.src !== src, firstLiveSource);
+check('enlarged live image updates between steps', true);
+await page.emulateMedia({ reducedMotion: 'reduce' });
+check('generation decoration respects reduced motion',
+  await page.locator('.generation-motion i').first().evaluate(el => getComputedStyle(el).animationName) === 'none');
+await page.locator('.generation-peek').getByRole('button', { name: 'Stop generation', exact: true }).click();
+await page.waitForFunction(() => document.querySelector('#gen-status')?.textContent.includes('Stopped'));
+check('stop from enlarged preview ends motion without saving a final result',
+  await page.locator('.preview-box').getAttribute('aria-busy') === 'false' &&
+  (await page.locator('.generation-label').textContent()).includes('not saved'));
+await page.keyboard.press('Escape');
+await page.emulateMedia({ reducedMotion: 'no-preference' });
+await page.getByLabel('Model', { exact: true }).selectOption('z-image-base');
 
 // ---- assets: decrypt on the fly ----
 await navigate('assets');

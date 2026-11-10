@@ -57,7 +57,7 @@ class GenerateBody(BaseModel):
 def _public_job(job: dict) -> dict:
     return {k: job[k] for k in
             ("id", "model_id", "status", "created", "prompt", "steps", "width", "height", "seed",
-             "error", "result_id", "asset_id", "mime", "video_tier", "video_aspect", "num_frames", "fps")
+             "error", "result_id", "asset_id", "mime", "video_tier", "video_aspect", "num_frames", "fps", "progress")
             if k in job}
 
 
@@ -238,13 +238,21 @@ async def _worker() -> None:
         last_model = model
         try:
             await runner_manager.start_runner(job["model_id"])
+            if job.get("cancel_requested"):
+                job["status"] = "cancelled"
+                _finish(job)
+                continue
             job["status"] = "running"
             _publish_job(job)
 
             def on_step(ev: dict) -> None:
+                progress = {key: ev.get(key) for key in ("step", "total", "stage", "preview_kind")}
+                # Keep only the latest live frame in memory for view/SSE reconnects.
+                progress["preview_b64"] = ev.get("preview_b64") or job.get("progress", {}).get("preview_b64")
+                job["progress"] = progress
                 events.publish({"type": "step", "job_id": job["id"],
-                                "step": ev.get("step"), "total": ev.get("total"),
-                                "preview_b64": ev.get("preview_b64"), "stage": ev.get("stage")})
+                                "width": job["width"], "height": job["height"], **progress,
+                                "preview_b64": ev.get("preview_b64")})
 
             params = {
                 "prompt": job["prompt"],
@@ -264,6 +272,8 @@ async def _worker() -> None:
                 params.update({"num_frames": job["num_frames"], "fps": job["fps"],
                                "video_tier": job["video_tier"], "video_aspect": job["video_aspect"]})
             final = await runner_manager.generate(params, on_step)
+            if job.get("cancel_requested"):
+                final = {"type": "cancelled"}
 
             if final.get("type") == "done":
                 mime = final.get("mime", "image/png")
@@ -335,6 +345,8 @@ def _finish(job: dict) -> None:
     global _current
     job.pop("ref_bytes", None)
     job.pop("video_bytes", None)
+    job.pop("progress", None)
+    job.pop("cancel_requested", None)
     if _current is job:
         _current = None
     _history.insert(0, job)
@@ -393,6 +405,7 @@ async def cancel_job(job_id: str):
             _finish(job)
             return {"ok": True}
     if _current and _current["id"] == job_id:
+        _current["cancel_requested"] = True
         await runner_manager.cancel_generation()
         return {"ok": True}
     raise HTTPException(404, "Job not queued or running")

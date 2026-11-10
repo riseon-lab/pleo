@@ -7,6 +7,14 @@ Prompt-builder and compatibility checks (no running server needed):
     python3 tests/training_toolkit_test.py
     python3 tests/runner_test.py
     python3 tests/qwen_image21_test.py
+    python3 tests/job_cancel_test.py
+
+Live-preview checks in a torch environment (no GPU required):
+
+    python3 tests/qwen_preview_test.py
+
+To additionally check the real preview checkpoint, set `PLEO_PREVIEW_WEIGHTS`
+to the pinned `taeqi2_1_tinier.safetensors` file before running that test.
 
 Qwen 2.1's model environment can additionally verify real Diffusers/PEFT
 adapter loading with a tiny CPU transformer (no weights or GPU required):

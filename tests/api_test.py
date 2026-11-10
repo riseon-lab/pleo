@@ -437,6 +437,9 @@ j1, j2 = r1.json()["job"]["id"], r2.json()["job"]["id"]
 time.sleep(1)
 q = c.get("/api/queue", headers=H).json()
 check("second job waits in queue", any(j["id"] == j2 for j in q["queued"]), str(q))
+live_progress = (q.get("current") or {}).get("progress", {})
+check("active job exposes latest live preview for reconnect", live_progress.get("step", 0) > 0 and
+      base64.b64decode(live_progress.get("preview_b64") or "")[:4] == b"\x89PNG", str(live_progress)[:100])
 r = c.post(f"/api/jobs/{j2}/cancel", headers=H)
 check("cancel queued job", r.status_code == 200)
 time.sleep(2)
@@ -452,6 +455,7 @@ while time.time() < deadline:
     time.sleep(1)
 check("running job cancelled mid-generation", st1 == "cancelled", str(st1))
 check("queued job cancelled", st2 == "cancelled", str(st2))
+check("finished jobs discard transient live previews", all("progress" not in j for j in q["history"]))
 
 # --- validation ---
 r = c.post("/api/generate", headers=H, json={**gen, "steps": 1, "width": 1080, "height": 1920})

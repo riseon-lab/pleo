@@ -18,6 +18,12 @@ On phones, Menu opens full-width navigation and the generation controls
 remain pinned to the bottom. The opening portrait is labelled as an example;
 live generation replaces it with the actual output.
 
+The generation viewer has a subtle blue motion effect while working. Click
+**Enlarge preview** (or the live image) to watch it in a larger view; **Stop
+generation** is available in both views. Stopping retains the last preview for
+inspection without saving a final result. Returning to Create restores the
+active job's latest preview. Motion effects respect reduced-motion preferences.
+
 Lightweight local model loader & runner for RunPod. FastAPI backend + vanilla
 JS frontend on port **3000**, per-model venv isolation, browser-side (E2E)
 encryption of assets and API keys. See `plan.md` for the full spec.
@@ -86,6 +92,15 @@ be reused, but 2512 LoRAs need retraining. The generator converts the trainer's
 fused gate/up adapter layout when loading those checkpoints. The compatibility
 pin and the older trainer environment are unchanged. This checkpoint uses the
 Qwen Research License.
+
+Qwen 2.1 live previews use the MIT-licensed
+[TAEQI2.1-Tinier decoder](https://huggingface.co/madebyollin/taeqi2_1)
+on CPU, with an 8.2 MB download cached on first model load. Preview images are
+approximate and capped at 384 pixels; they update at the first step, every
+fourth step, and the last step. This keeps the full VAE offloaded during
+sampling. If the decoder cannot load, generation continues with progress and
+an explicit preview-unavailable message. Live frames stay in memory and are
+discarded when the job finishes; they are not stored in history or assets.
 
 ## Data Studio & Training
 
